@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#C62828">
+<title>GestionÉcole — Espace du maître</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icone-192.png">
+<link rel="apple-touch-icon" href="icone-192.png">
+<style>
+  :root { --rouge: #C62828; --rouge-f: #A31F1F; --rose: #FDECEA; --vert: #2E7D32; --vert-p: #E3F1E4;
+          --texte: #1d1d1d; --gris: #666; --fond: #F4F4F4; --trait: #DDD; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; background: var(--fond); color: var(--texte);
+               font-family: "Segoe UI", Roboto, Arial, sans-serif; font-size: 18px; }
+  header { background: var(--rouge); color: white; padding: 14px 16px; position: sticky; top: 0; z-index: 5;
+           display: flex; align-items: center; gap: 10px; }
+  header .titre { font-size: 20px; font-weight: bold; flex: 1; line-height: 1.2; }
+  header .sous { font-size: 13px; opacity: .9; font-weight: normal; }
+  header button.retour { background: transparent; border: 0; color: white; font-size: 26px; padding: 0 6px; }
+  main { max-width: 560px; margin: 0 auto; padding: 14px 16px 90px; }
+  .carte { background: white; border-radius: 14px; padding: 16px; margin: 0 0 14px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  h1 { font-size: 22px; margin: 4px 0 10px; } h2 { font-size: 19px; margin: 0 0 8px; }
+  p { line-height: 1.45; margin: 6px 0; } .gris { color: var(--gris); font-size: 15px; }
+  button.gros, .gros { display: block; width: 100%; font-size: 19px; font-weight: bold; padding: 15px 14px; margin: 10px 0 0;
+              border-radius: 12px; border: 2px solid var(--rouge); background: var(--rouge); color: white; text-align: center; }
+  button.contour { background: white; color: var(--rouge); }
+  button.vert { background: var(--vert); border-color: var(--vert); }
+  button:disabled { opacity: .45; }
+  input[type=text], input[type=password], textarea {
+      width: 100%; font-size: 21px; padding: 12px; border: 2px solid var(--trait); border-radius: 10px; background: white; }
+  input:focus, textarea:focus { outline: none; border-color: var(--rouge); }
+  .message { padding: 12px 14px; border-radius: 10px; margin: 10px 0; font-size: 16px; line-height: 1.4; }
+  .message.erreur { background: var(--rose); color: #8E1B1B; } .message.ok { background: var(--vert-p); color: #1B5E20; }
+  .message.info { background: #FFF6E0; color: #6B4E00; }
+  .ligne-menu { display: flex; align-items: center; gap: 12px; padding: 16px; background: white; border-radius: 14px;
+                margin: 0 0 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); font-size: 19px; font-weight: bold; width: 100%;
+                border: 0; text-align: left; color: var(--texte); }
+  .ligne-menu .ic { font-size: 28px; } .ligne-menu .ex { display: block; font-size: 14px; font-weight: normal; color: var(--gris); margin-top: 3px; }
+  .eleve { background: white; border-radius: 12px; padding: 12px 14px; margin: 0 0 10px; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+  .eleve .nom { font-weight: bold; font-size: 18px; margin-bottom: 6px; } .eleve .num { color: var(--gris); font-weight: normal; }
+  .parties { display: flex; flex-wrap: wrap; gap: 10px; }
+  .partie { flex: 1 1 130px; } .partie label { display: block; font-size: 14px; color: var(--gris); margin-bottom: 3px; }
+  .partie input { text-align: center; font-size: 24px; font-weight: bold; padding: 10px; }
+  .partie input:disabled { background: #F7F7F7; color: var(--texte); border-color: #EEE; }
+  .partie input.faux { border-color: var(--rouge); background: var(--rose); }
+  .barre-bas { position: fixed; left: 0; right: 0; bottom: 0; background: white; border-top: 1px solid var(--trait);
+               padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); z-index: 6; }
+  .barre-bas .dedans { max-width: 560px; margin: 0 auto; display: flex; gap: 10px; }
+  .barre-bas button { margin: 0; flex: 1; }
+  .etat { font-size: 14px; font-weight: bold; } .etat.ok { color: var(--vert); } .etat.non { color: var(--rouge); }
+  .code-tel { font-family: Consolas, monospace; font-size: 30px; font-weight: bold; letter-spacing: 2px; text-align: center;
+              padding: 12px; background: #F2F2F2; border-radius: 10px; color: var(--texte); user-select: all; }
+  .pied { text-align: center; color: #999; font-size: 12px; margin-top: 18px; }
+  .cache { display: none !important; }
+  .attente { position: fixed; inset: 0; background: rgba(255,255,255,.85); display: flex; align-items: center;
+             justify-content: center; font-size: 20px; font-weight: bold; color: var(--rouge); z-index: 20; text-align: center; padding: 20px; }
+</style>
+</head>
+<body>
+<header>
+  <button class="retour cache" id="b-retour" aria-label="Retour">←</button>
+  <div class="titre"><span id="h-titre">GestionÉcole</span><div class="sous" id="h-sous">Espace du maître</div></div>
+</header>
+<main id="ecran"></main>
+<div class="barre-bas cache" id="barre"><div id="barre-msg" style="max-width:560px;margin:0 auto"></div><div class="dedans" id="barre-dedans"></div></div>
+<div class="attente cache" id="attente">Un instant…</div>
+<input type="file" id="choix-fichier" class="cache">
+
+<script>
+"use strict";
+/* =====================================================================
+   GestionÉcole — application du téléphone (espace du maître), version 1.0
+   Conçue par DSOB. Lit les fichiers « Classe_… .classe » du logiciel de
+   l'ordinateur et fabrique les fichiers « Notes_… .notes » qu'il reçoit.
+   Tout reste dans le téléphone ; rien ne part sur Internet.
+   ===================================================================== */
+const NOM_LOGICIEL = "GestionEcoleExamEvaluations", AUTEUR = "DSOB";
+const CLE_PUBLIQUE_DSOB = "hhwB2NkqOBWGfXeTgMt73TCqmBrzvLqrACvQU0NFlb4=";
+const ESSAI_JOURS = 7, MOIS_ACTIVATION = 9, ESSAIS_MAX = 5, DUREE_BLOCAGE = 120, ITERATIONS = 300000;
+const MATIERES_ELEMENTAIRE = [
+  {nom: "Langue et communication", parties: [["Ressources", 40], ["Compétences", 60]]},
+  {nom: "Mathématiques", parties: [["Ressources", 40], ["Compétences", 60]]},
+  {nom: "Découverte du monde", parties: [["Ressources", 24], ["Compétences", 16]]},
+  {nom: "Éducation au développement durable", parties: [["Ressources", 24], ["Compétences", 16]]},
+  {nom: "Éducation artistique", parties: [["Note", 10]]},
+  {nom: "Éducation musicale", parties: [["Note", 10]]},
+  {nom: "Arabe", parties: [["Note", 10]]},
+  {nom: "Anglais", parties: [["Note", 10]]}];
+
+/* ---------- 1. JSON qui garde l'écriture exacte des nombres (12.0 reste 12.0, comme dans Python) ---------- */
+class Num { constructor(t) { this.t = String(t); } valueOf() { return parseFloat(this.t); } toString() { return this.t; } }
+function parseJ(txt) {
+  let i = 0;
+  const blanc = () => { while (i < txt.length && " \t\n\r".includes(txt[i])) i++; };
+  function val() {
+    blanc(); const c = txt[i];
+    if (c === "{") { i++; const o = {}; blanc(); if (txt[i] === "}") { i++; return o; }
+      for (;;) { blanc(); const k = chaine(); blanc(); i++; o[k] = val(); blanc(); if (txt[i] === ",") { i++; continue; } i++; return o; } }
+    if (c === "[") { i++; const a = []; blanc(); if (txt[i] === "]") { i++; return a; }
+      for (;;) { a.push(val()); blanc(); if (txt[i] === ",") { i++; continue; } i++; return a; } }
+    if (c === '"') return chaine();
+    if (txt.startsWith("true", i)) { i += 4; return true; }
+    if (txt.startsWith("false", i)) { i += 5; return false; }
+    if (txt.startsWith("null", i)) { i += 4; return null; }
+    if (txt.startsWith("NaN", i)) { i += 3; return null; }
+    const m = /^-?(?:Infinity|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/.exec(txt.slice(i, i + 40));
+    if (!m) throw new Error("JSON abîmé");
+    i += m[0].length; return new Num(m[0]);
+  }
+  function chaine() {
+    const debut = i; i++;
+    while (txt[i] !== '"') { if (txt[i] === "\\") i++; i++; }
+    i++; return JSON.parse(txt.slice(debut, i));
+  }
+  const r = val(); return r;
+}
+function strJ(v) {
+  if (v instanceof Num) return v.t;
+  if (v === null || v === undefined) return "null";
+  if (typeof v === "number") return Number.isInteger(v) ? String(v) : String(v);
+  if (typeof v === "string" || typeof v === "boolean") return JSON.stringify(v);
+  if (Array.isArray(v)) return "[" + v.map(strJ).join(", ") + "]";
+  return "{" + Object.keys(v).map(k => JSON.stringify(k) + ": " + strJ(v[k])).join(", ") + "}";
+}
+const copieJ = v => parseJ(strJ(v));
+function flottantPython(x) {        // comme repr(float) de Python : 12 -> "12.0", 12.5 -> "12.5"
+  return Number.isInteger(x) ? x.toFixed(1) : String(x);
+}
+
+/* ---------- 2. Base64 et octets ---------- */
+const enc = new TextEncoder(), dec = new TextDecoder();
+function b64enOctets(s) { s = s.replace(/-/g, "+").replace(/_/g, "/"); while (s.length % 4) s += "=";
+  const b = atob(s), o = new Uint8Array(b.length); for (let k = 0; k < b.length; k++) o[k] = b.charCodeAt(k); return o; }
+function octetsEnB64(o, url) { let s = ""; for (let k = 0; k < o.length; k++) s += String.fromCharCode(o[k]);
+  s = btoa(s); return url ? s.replace(/\+/g, "-").replace(/\//g, "_") : s; }
+function concat(...l) { const n = l.reduce((a, x) => a + x.length, 0), o = new Uint8Array(n); let p = 0;
+  for (const x of l) { o.set(x, p); p += x.length; } return o; }
+function egaux(a, b) { if (a.length !== b.length) return false; let d = 0; for (let k = 0; k < a.length; k++) d |= a[k] ^ b[k]; return d === 0; }
+
+/* ---------- 3. Fernet (le même chiffrement que le logiciel de l'ordinateur) ---------- */
+async function fernetCles(cle) {
+  const o = b64enOctets(cle);
+  return {sig: await crypto.subtle.importKey("raw", o.slice(0, 16), {name: "HMAC", hash: "SHA-256"}, false, ["sign"]),
+          chif: await crypto.subtle.importKey("raw", o.slice(16, 32), {name: "AES-CBC"}, false, ["encrypt", "decrypt"])};
+}
+async function fernetDechiffrer(cle, jeton) {
+  const k = await fernetCles(cle), o = b64enOctets(jeton.trim());
+  if (o[0] !== 0x80 || o.length < 57) throw new Error("jeton");
+  const corps = o.slice(0, o.length - 32), mac = o.slice(o.length - 32);
+  const calcule = new Uint8Array(await crypto.subtle.sign("HMAC", k.sig, corps));
+  if (!egaux(calcule, mac)) throw new Error("mauvaise clé");
+  return new Uint8Array(await crypto.subtle.decrypt({name: "AES-CBC", iv: o.slice(9, 25)}, k.chif, o.slice(25, o.length - 32)));
+}
+async function fernetChiffrer(cle, donnees) {
+  const k = await fernetCles(cle), iv = crypto.getRandomValues(new Uint8Array(16));
+  const t = Math.floor(Date.now() / 1000), ts = new Uint8Array(8);
+  for (let n = 7, v = t; n >= 0; n--, v = Math.floor(v / 256)) ts[n] = v % 256;
+  const chiffre = new Uint8Array(await crypto.subtle.encrypt({name: "AES-CBC", iv}, k.chif, donnees));
+  const corps = concat(new Uint8Array([0x80]), ts, iv, chiffre);
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", k.sig, corps));
+  return octetsEnB64(concat(corps, mac), true);
+}
+async function cleDepuisCode(code, sel) {     // PBKDF2-SHA256, 300 000 tours, comme cle_depuis_code
+  const base = await crypto.subtle.importKey("raw", enc.encode(code), "PBKDF2", false, ["deriveBits"]);
+  const brut = new Uint8Array(await crypto.subtle.deriveBits({name: "PBKDF2", hash: "SHA-256", salt: sel, iterations: ITERATIONS}, base, 256));
+  return octetsEnB64(brut, true);
+}
+
+/* ---------- 4. Ed25519 : vérifier qu'une licence a bien été fabriquée par DSOB ---------- */
+const ED = (() => {
+  const P = 2n ** 255n - 19n, L = 2n ** 252n + 27742317777372353535851937790883648493n;
+  const md = (a, m = P) => { const r = a % m; return r >= 0n ? r : r + m; };
+  const pw = (b, e, m = P) => { let r = 1n; b = md(b, m); while (e > 0n) { if (e & 1n) r = r * b % m; b = b * b % m; e >>= 1n; } return r; };
+  const inv = a => pw(a, P - 2n);
+  const D = md(-121665n * inv(121666n)), I = pw(2n, (P - 1n) / 4n);
+  const Gy = md(4n * inv(5n));
+  function xDepuisY(y, signe) {
+    const x2 = md((y * y - 1n) * inv(D * y * y + 1n)); if (x2 === 0n) return signe ? null : 0n;
+    let x = pw(x2, (P + 3n) / 8n);
+    if (md(x * x - x2) !== 0n) x = md(x * I);
+    if (md(x * x - x2) !== 0n) return null;
+    if ((x & 1n) !== BigInt(signe)) x = P - x; return x;
+  }
+  const B = [xDepuisY(Gy, 0), Gy, 1n, md(xDepuisY(Gy, 0) * Gy)];
+  function ajoute(p, q) {
+    const A = md((p[1] - p[0]) * (q[1] - q[0])), Bb = md((p[1] + p[0]) * (q[1] + q[0])), C = md(2n * p[3] * q[3] * D),
+          Dd = md(2n * p[2] * q[2]), E = Bb - A, F = Dd - C, G = Dd + C, H = Bb + A;
+    return [md(E * F), md(G * H), md(F * G), md(E * H)];
+  }
+  function fois(s, p) { let r = [0n, 1n, 1n, 0n]; while (s > 0n) { if (s & 1n) r = ajoute(r, p); p = ajoute(p, p); s >>= 1n; } return r; }
+  function code(p) { const zi = inv(p[2]), x = md(p[0] * zi), y = md(p[1] * zi); let v = y | ((x & 1n) << 255n);
+    const o = new Uint8Array(32); for (let k = 0; k < 32; k++) { o[k] = Number(v & 255n); v >>= 8n; } return o; }
+  function nombre(o) { let v = 0n; for (let k = o.length - 1; k >= 0; k--) v = (v << 8n) | BigInt(o[k]); return v; }
+  function decode(o) { const v = nombre(o), y = v & ((1n << 255n) - 1n), s = Number(v >> 255n);
+    if (y >= P) return null; const x = xDepuisY(y, s); return x === null ? null : [x, y, 1n, md(x * y)]; }
+  async function verifie(pub, sig, msg) {
+    if (sig.length !== 64 || pub.length !== 32) return false;
+    const A = decode(pub), R = decode(sig.slice(0, 32)), S = nombre(sig.slice(32));
+    if (!A || !R || S >= L) return false;
+    const h = md(nombre(new Uint8Array(await crypto.subtle.digest("SHA-512", concat(sig.slice(0, 32), pub, msg)))), L);
+    return egaux(code(fois(S, B)), code(ajoute(R, fois(h, A))));
+  }
+  return {verifie};
+})();
+function base32enOctets(t) {
+  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"; let bits = 0, val = 0; const o = [];
+  for (const c of t) { const v = A.indexOf(c); if (v < 0) return null; val = (val << 5) | v; bits += 5;
+    if (bits >= 8) { o.push((val >>> (bits - 8)) & 255); bits -= 8; } }
+  return new Uint8Array(o);
+}
+function lireTexteLicence(texte) {
+  texte = texte.replace(/\s+/g, "").toUpperCase();
+  const m = /^(?:LICENCE)?(MAITRE-?)?(\d{4})-(\d{4}):([A-Z2-7-]+)$/.exec(texte);
+  if (!m || +m[3] !== +m[2] + 1) return null;
+  const sig = base32enOctets(m[4].replace(/-/g, ""));
+  if (!sig || sig.length !== 64) return null;
+  return {annee: m[2] + "-" + m[3], sig, genre: m[1] ? "maitre" : "ecole"};
+}
+async function licenceAuthentique(lue, codeTel) {
+  const msg = enc.encode("GestionExamEvaluations|" + (lue.genre === "maitre" ? "licence-maitre" : "licence") + "|" + lue.annee + "|" + codeTel);
+  try { return await ED.verifie(b64enOctets(CLE_PUBLIQUE_DSOB), lue.sig, msg); } catch (e) { return false; }
+}
+
+/* ---------- 5. Mémoire du téléphone ---------- */
+const CLE_MEMOIRE = "gestionecole_telephone_v1";
+let M = {};
+function chargerMemoire() { try { M = JSON.parse(localStorage.getItem(CLE_MEMOIRE) || "{}") || {}; } catch (e) { M = {}; } }
+function garderMemoire() { try { localStorage.setItem(CLE_MEMOIRE, JSON.stringify(M)); return true; }
+  catch (e) { alerte("Impossible d'enregistrer dans le téléphone (mémoire pleine ?)."); return false; } }
+function codeTelephone() {
+  if (!M.code_tel) {
+    const r = crypto.getRandomValues(new Uint8Array(12));
+    let t = ""; for (const x of r) t += "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"[x % 32];
+    M.code_tel = t.slice(0, 4) + "-" + t.slice(4, 8) + "-" + t.slice(8, 12); garderMemoire();
+  }
+  return M.code_tel;
+}
+
+/* ---------- 6. Licence : essai de 7 jours, puis licence maître / professeur ---------- */
+let LIC = {statut: "essai"};
+async function verifierLicence() {
+  const maintenant = Date.now();
+  if (!M.premier_jour) { M.premier_jour = maintenant; garderMemoire(); }
+  if (M.horloge && maintenant < M.horloge - 86400000) { LIC = {statut: "horloge"}; return LIC; }
+  M.horloge = Math.max(M.horloge || 0, maintenant); garderMemoire();
+  const lue = M.licence ? lireTexteLicence(M.licence) : null;
+  if (lue && lue.genre === "maitre" && await licenceAuthentique(lue, codeTelephone())) {
+    const premiere = +lue.annee.slice(0, 4), fin = new Date(premiere + 1, 7, 31, 23, 59, 59);
+    const jours = Math.ceil((fin - maintenant) / 86400000);
+    if (maintenant > fin) LIC = {statut: "expiree", annee: lue.annee, fin};
+    else if (maintenant < new Date(premiere, MOIS_ACTIVATION - 1, 1)) LIC = {statut: "pas_encore", annee: lue.annee};
+    else LIC = {statut: "valide", annee: lue.annee, fin, jours};
+    return LIC;
+  }
+  const debut = new Date(M.premier_jour); debut.setHours(0, 0, 0, 0);
+  const finEssai = new Date(debut.getTime() + ESSAI_JOURS * 86400000 - 1);
+  const reste = Math.ceil((finEssai - maintenant) / 86400000);
+  LIC = maintenant <= finEssai ? {statut: "essai", fin: finEssai, jours: Math.max(1, reste)} : {statut: "essai_termine", fin: finEssai};
+  return LIC;
+}
+const peutTaper = () => LIC.statut === "valide" || LIC.statut === "essai";
+const dateFr = d => new Date(d).toLocaleDateString("fr-FR");
+function texteLicence() {
+  switch (LIC.statut) {
+    case "valide": return "Licence " + LIC.annee + " : valable jusqu'au " + dateFr(LIC.fin) + " (" + LIC.jours + " jour(s)).";
+    case "essai": return "Essai gratuit : encore " + LIC.jours + " jour" + (LIC.jours > 1 ? "s" : "") + " (jusqu'au " + dateFr(LIC.fin) + ").";
+    case "essai_termine": return "L'essai gratuit de " + ESSAI_JOURS + " jours est terminé. Vous ne pouvez plus taper de notes : activez une licence. Vous pouvez encore envoyer les notes déjà tapées.";
+    case "expiree": return "La licence " + LIC.annee + " a expiré le " + dateFr(LIC.fin) + ". Renouvelez-la pour taper des notes. Vous pouvez encore envoyer les notes déjà tapées.";
+    case "pas_encore": return "Cette licence " + LIC.annee + " ne peut servir qu'à partir du 1er septembre " + LIC.annee.slice(0, 4) + ".";
+    case "horloge": return "La date de ce téléphone est en retard. Remettez la bonne date et la bonne heure dans les Paramètres, puis rouvrez l'application.";
+  }
+  return "";
+}
+
+/* ---------- 7. La classe : ouvrir, garder, mettre à jour ---------- */
+let S = null;          // session ouverte : {donnees, cle, sel, code}
+let erreursCode = 0, bloqueJusqua = 0;
+async function ouvrirAvecCode(contenu, code) {
+  const id = code.split("-")[0];
+  for (const serrure of (contenu.acces || [])) {
+    if (serrure.id !== id) continue;
+    try {
+      const cleProf = await cleDepuisCode(code, b64enOctets(serrure.sel));
+      const cle = dec.decode(await fernetDechiffrer(cleProf, serrure.cle));
+      const donnees = parseJ(dec.decode(await fernetDechiffrer(cle, contenu.donnees)));
+      return {donnees, cle, sel: contenu.sel};
+    } catch (e) { /* mauvais code */ }
+  }
+  return null;
+}
+async function garderClasse() {          // les données restent chiffrées dans le téléphone
+  M.classe.donnees = await fernetChiffrer(S.cle, enc.encode(strJ(S.donnees)));
+  return garderMemoire();
+}
+function copieMaitre(d) { return ((d || {}).synchro || {}).copie_maitre || {}; }
+function nomsClasses() { return (copieMaitre(S.donnees).classes || []).filter(n => S.donnees.classes && S.donnees.classes[n]); }
+function matieresEnDicts(liste) {
+  const r = [];
+  for (const m of (liste || [])) {
+    if (typeof m === "string") { const o = MATIERES_ELEMENTAIRE.find(x => x.nom === m); if (o) r.push({nom: m, parties: o.parties}); }
+    else r.push(m);
+  }
+  return r;
+}
+const maxiPartie = p => (Array.isArray(p) && p.length > 1) ? parseFloat(p[1]) : NaN;
+const baremeIncomplet = m => !m.parties || !m.parties.length || m.parties.some(p => !(maxiPartie(p) > 0));
+function matiereComplete(compo, classe, m) {
+  const els = classe.eleves || []; if (!els.length) return false;
+  return els.every(el => (((compo.notes || {})[el.id] || {})[m.nom] || []).length === m.parties.length);
+}
+// Toutes les notes de la classe : {"classe|composition|élève|activité": texte exact}
+function toutesLesNotes(d) {
+  const r = {};
+  for (const n of (copieMaitre(d).classes || [])) {
+    const c = (d.classes || {})[n]; if (!c) continue;
+    for (const [cle, compo] of Object.entries(c.compositions || {}))
+      for (const [el, ns] of Object.entries((compo || {}).notes || {}))
+        for (const [mat, v] of Object.entries(ns || {})) r[c.id + "|" + cle + "|" + el + "|" + mat] = strJ(v);
+  }
+  return r;
+}
+// Mise à jour : la classe du directeur, mais on garde les notes tapées ici et pas encore envoyées
+function garderNotesNonEnvoyees(ancienne, nouvelle) {
+  const L = toutesLesNotes(ancienne), N = toutesLesNotes(nouvelle);
+  const envoye = (ancienne.synchro || {}).envoye_tel || {};
+  const parId = {}; for (const [n, c] of Object.entries(nouvelle.classes || {})) if (c && c.id) parId[c.id] = c;
+  const lecture = {}; for (const n of Object.keys(ancienne.classes || {})) { const c = ancienne.classes[n]; if (c && c.id) lecture[c.id] = c; }
+  let gardes = 0;
+  for (const k of new Set([...Object.keys(L), ...Object.keys(N)])) {
+    if (L[k] === N[k]) continue;
+    if (!(k in L) && !(k in N)) continue;
+    if (L[k] === envoye[k]) continue;            // le directeur a déjà eu cette note : sa décision compte
+    if (!(k in L)) continue;
+    const [cid, cle, el, mat] = k.split("|"), dest = parId[cid], src = lecture[cid];
+    if (!dest || !src) continue;
+    dest.compositions = dest.compositions || {};
+    if (!dest.compositions[cle]) {
+      const meta = copieJ(src.compositions[cle]); meta.notes = {}; dest.compositions[cle] = meta;
+    }
+    const notes = (dest.compositions[cle].notes = dest.compositions[cle].notes || {});
+    (notes[el] = notes[el] || {})[mat] = copieJ(src.compositions[cle].notes[el][mat]);
+    gardes++;
+  }
+  nouvelle.synchro = nouvelle.synchro || {};
+  if (ancienne.synchro && ancienne.synchro.envoye_tel) nouvelle.synchro.envoye_tel = ancienne.synchro.envoye_tel;
+  if (ancienne.synchro && ancienne.synchro.dernier_envoi) nouvelle.synchro.dernier_envoi = ancienne.synchro.dernier_envoi;
+  return gardes;
+}
+
+/* ---------- 8. Fichiers : choisir, envoyer ---------- */
+function choisirFichier() {
+  return new Promise(res => {
+    const f = document.getElementById("choix-fichier"); f.value = "";
+    f.onchange = () => res(f.files && f.files[0] ? f.files[0] : null); f.click();
+  });
+}
+function sansAccents(t) { return t.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, ""); }
+function nomFichierNotes() {
+  const d = new Date(), z = n => String(n).padStart(2, "0");
+  return "Notes_" + sansAccents(nomsClasses().join("_") + "_" + (S.donnees.nom_ecole || "")) + "_" + d.getFullYear() + "-" + z(d.getMonth() + 1)
+       + "-" + z(d.getDate()) + "_" + z(d.getHours()) + "h" + z(d.getMinutes()) + ".notes";
+}
+async function partagerFichier(nom, texte) {
+  const fichier = new File([texte], nom, {type: "application/octet-stream"});
+  if (navigator.canShare && navigator.canShare({files: [fichier]})) {
+    try { await navigator.share({files: [fichier], title: nom, text: "Notes de ma classe (fichier pour le directeur)"}); return "partage"; }
+    catch (e) { if (e && e.name === "AbortError") return "annule"; }
+  }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(fichier); a.download = nom;
+  document.body.appendChild(a); a.click(); a.remove(); return "telecharge";
+}
+
+/* ---------- 9. Petits outils d'affichage ---------- */
+const $ = id => document.getElementById(id);
+const esc = t => String(t ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+function attente(oui, texte) { $("attente").textContent = texte || "Un instant…"; $("attente").classList.toggle("cache", !oui); }
+function alerte(t) { window.alert(t); }
+let avantDeQuitter = null;           // l'écran de saisie prévient s'il reste des notes non enregistrées
+function peutQuitter() {
+  if (avantDeQuitter && avantDeQuitter()) {
+    if (!confirm("Des notes tapées ne sont pas encore enregistrées.\n\nQuitter quand même ? (elles seront perdues)")) return false;
+  }
+  avantDeQuitter = null; return true;
+}
+function ecran(titre, sous, html, retour, barre) {
+  $("h-titre").textContent = titre; $("h-sous").textContent = sous || "";
+  $("ecran").innerHTML = html + '<div class="pied">' + NOM_LOGICIEL + " — téléphone · logiciel conçu par " + AUTEUR + "</div>";
+  const b = $("b-retour"); b.classList.toggle("cache", !retour); b.onclick = () => { if (peutQuitter()) retour(); };
+  $("barre").classList.toggle("cache", !barre); $("barre-dedans").innerHTML = barre || ""; $("barre-msg").innerHTML = "";
+  window.scrollTo(0, 0);
+  ecranRetour = retour || null;
+}
+let ecranRetour = null;
+history.pushState({app: 1}, "");
+window.addEventListener("popstate", () => {         // bouton « retour » d'Android
+  history.pushState({app: 1}, "");
+  if (ecranRetour && peutQuitter()) ecranRetour();
+});
+function texteNote(v) {
+  if (v === "absent") return "NC";
+  const x = parseFloat(v instanceof Num ? v.t : v); if (isNaN(x)) return "";
+  return Number.isInteger(x) ? String(x) : String(x).replace(".", ",");
+}
+function lireNote(texte, maxi) {
+  const t = texte.trim().toLowerCase().replace(",", ".");
+  if (["nc", "n.c", "n.c."].includes(t)) return {note: "absent"};
+  if (!t) return {erreur: "vide"};
+  if (!/^\d+(\.\d+)?$/.test(t)) return {erreur: "pas un nombre"};
+  const x = parseFloat(t); if (x < 0 || x > maxi) return {erreur: "hors barème"};
+  return {note: new Num(flottantPython(Math.round(x * 100) / 100))};
+}
+
+/* ---------- 10. Les écrans ---------- */
+async function demarrer() {
+  chargerMemoire(); codeTelephone(); await verifierLicence();
+  if (M.classe) return ecranCode(); return ecranAccueil();
+}
+
+function bandeauLicence() {
+  const classe = LIC.statut === "valide" ? "ok" : (peutTaper() ? "info" : "erreur");
+  return '<div class="message ' + classe + '">' + esc(texteLicence()) + "</div>";
+}
+
+function ecranAccueil(message) {
+  ecran("GestionÉcole", "Espace du maître — sur le téléphone",
+    (message || "") + bandeauLicence() +
+    '<div class="carte"><h1>Bienvenue</h1><p>Avec cette application, vous tapez les notes de votre classe sur votre téléphone, '
+    + "même sans Internet, puis vous les envoyez au directeur par WhatsApp.</p>"
+    + '<p class="gris">Pour commencer, le directeur vous envoie le fichier de votre classe (« Classe_… .classe ») '
+    + "et votre code personnel (E… ou P…).</p>"
+    + '<button class="gros" id="b-importer">📥 Importer ma classe</button>'
+    + '<button class="gros contour" id="b-licence">🔑 Licence</button></div>' + boutonInstaller());
+  $("b-importer").onclick = ecranImporter; $("b-licence").onclick = () => ecranLicence(ecranAccueil);
+  brancherInstaller();
+}
+
+function ecranImporter(retour) {
+  const mise_a_jour = !!M.classe;
+  ecran(mise_a_jour ? "Mettre à jour ma classe" : "Importer ma classe", "Fichier reçu du directeur",
+    '<div class="carte"><h2>1. Votre code personnel</h2>'
+    + '<input type="password" id="code" autocomplete="off" autocapitalize="characters" placeholder="ex : E03-4KQX29">'
+    + '<p><label><input type="checkbox" id="voir"> Voir le code</label></p>'
+    + "<h2 style='margin-top:14px'>2. Le fichier de la classe</h2>"
+    + '<p class="gris">Choisissez le fichier « Classe_… » : dans le dossier <b>Téléchargements</b>, ou dans <b>WhatsApp › Documents</b>.</p>'
+    + '<button class="gros" id="b-choisir">Choisir le fichier et importer</button>'
+    + (mise_a_jour ? '<p class="gris">Les notes tapées ici et pas encore envoyées au directeur sont gardées.</p>' : "")
+    + '<div id="msg"></div></div>',
+    retour || (mise_a_jour ? ecranClasse : ecranAccueil));
+  $("voir").onchange = e => $("code").type = e.target.checked ? "text" : "password";
+  $("b-choisir").onclick = async () => {
+    const msg = t => $("msg").innerHTML = '<div class="message erreur">' + esc(t) + "</div>";
+    if (Date.now() < bloqueJusqua) return msg("Trop d'erreurs. Réessayez dans " + Math.ceil((bloqueJusqua - Date.now()) / 1000) + " secondes.");
+    let code = $("code").value.replace(/\s/g, "").toUpperCase();
+    if (/^[EP]\d{2}[A-Z0-9]{6}$/.test(code)) code = code.slice(0, 3) + "-" + code.slice(3);
+    if (!/^[EP]\d{2}-[A-Z0-9]{6}$/.test(code)) return msg("Tapez d'abord votre code personnel (ex : E03-4KQX29).");
+    const f = await choisirFichier(); if (!f) return;
+    attente(true, "Vérification du code…\n(quelques secondes)");
+    let contenu, ouvert = null;
+    try { contenu = JSON.parse(await f.text()); ouvert = await ouvrirAvecCode(contenu, code); } catch (e) { contenu = null; }
+    attente(false);
+    if (!contenu || !String(contenu.format || "").startsWith("GestionExamEvaluations")) return msg("Ce fichier n'est pas un fichier de classe du logiciel.");
+    if (!ouvert) {
+      erreursCode++;
+      if (erreursCode >= ESSAIS_MAX) { erreursCode = 0; bloqueJusqua = Date.now() + DUREE_BLOCAGE * 1000;
+        return msg("Code incorrect (ou fichier d'une autre classe). Trop d'erreurs : attendez " + DUREE_BLOCAGE + " secondes."); }
+      return msg("Code incorrect, ou ce fichier n'est pas celui de votre classe. Il vous reste " + (ESSAIS_MAX - erreursCode) + " essai(s).");
+    }
+    erreursCode = 0;
+    const cm = copieMaitre(ouvert.donnees);
+    if (!cm.code || cm.code !== code.slice(0, 3)) return msg("Ce fichier n'est pas un fichier de classe préparé pour vous par le directeur.");
+    let gardes = 0;
+    if (mise_a_jour) {
+      if (!S || S.code !== code) {
+        const ancien = await ouvrirAvecCode(M.classe.fichier, code);
+        if (!ancien) return msg("Ce n'est pas le code de la classe déjà installée sur ce téléphone.");
+        try { ancien.donnees = parseJ(dec.decode(await fernetDechiffrer(ancien.cle, M.classe.donnees))); } catch (e) {}
+        S = {donnees: ancien.donnees, cle: ancien.cle, sel: ancien.sel, code};
+      }
+      const avant = copieMaitre(S.donnees).exportee_le;
+      if (cm.exportee_le && avant && +cm.exportee_le < +avant &&
+          !confirm("Ce fichier est PLUS ANCIEN que celui déjà installé. L'installer quand même ?")) return;
+      gardes = garderNotesNonEnvoyees(S.donnees, ouvert.donnees);
+    }
+    S = {donnees: ouvert.donnees, cle: ouvert.cle, sel: ouvert.sel, code};
+    M.classe = {fichier: {format: contenu.format, sel: contenu.sel, donnees: contenu.donnees, acces: contenu.acces}, donnees: ""};
+    if (!(await garderClasse())) return;
+    ecranClasse('<div class="message ok">✓ Classe ' + (mise_a_jour ? "mise à jour" : "installée") + " sur ce téléphone."
+      + (gardes ? "<br>" + gardes + " note(s) tapée(s) ici et pas encore envoyée(s) ont été gardées." : "") + "</div>");
+  };
+}
+
+function ecranCode(message) {
+  ecran("GestionÉcole", "Espace du maître",
+    (message || "") + bandeauLicence()
+    + '<div class="carte"><h1>Ouvrir ma classe</h1><p class="gris">Tapez votre code personnel (E… ou P…).</p>'
+    + '<input type="password" id="code" autocomplete="off" autocapitalize="characters" placeholder="ex : E03-4KQX29">'
+    + '<p><label><input type="checkbox" id="voir"> Voir le code</label></p>'
+    + '<button class="gros" id="b-ouvrir">Ouvrir</button><div id="msg"></div></div>'
+    + '<button class="gros contour" id="b-licence">🔑 Licence</button>' + boutonInstaller());
+  $("voir").onchange = e => $("code").type = e.target.checked ? "text" : "password";
+  $("b-licence").onclick = () => ecranLicence(ecranCode);
+  $("code").onkeydown = e => { if (e.key === "Enter") $("b-ouvrir").click(); };
+  $("b-ouvrir").onclick = async () => {
+    const msg = t => $("msg").innerHTML = '<div class="message erreur">' + esc(t) + "</div>";
+    if (Date.now() < bloqueJusqua) return msg("Trop d'erreurs. Réessayez dans " + Math.ceil((bloqueJusqua - Date.now()) / 1000) + " secondes.");
+    let code = $("code").value.replace(/\s/g, "").toUpperCase();
+    if (/^[EP]\d{2}[A-Z0-9]{6}$/.test(code)) code = code.slice(0, 3) + "-" + code.slice(3);
+    attente(true, "Vérification du code…");
+    const o = /^[EP]\d{2}-[A-Z0-9]{6}$/.test(code) ? await ouvrirAvecCode(M.classe.fichier, code) : null;
+    if (o) { try { o.donnees = parseJ(dec.decode(await fernetDechiffrer(o.cle, M.classe.donnees))); } catch (e) {} }
+    attente(false);
+    if (!o) {
+      erreursCode++;
+      if (erreursCode >= ESSAIS_MAX) { erreursCode = 0; bloqueJusqua = Date.now() + DUREE_BLOCAGE * 1000;
+        return msg("Code incorrect. Trop d'erreurs : attendez " + DUREE_BLOCAGE + " secondes."); }
+      return msg("Code incorrect. Il vous reste " + (ESSAIS_MAX - erreursCode) + " essai(s).");
+    }
+    erreursCode = 0; S = {donnees: o.donnees, cle: o.cle, sel: o.sel, code};
+    await verifierLicence(); ecranClasse();
+  };
+  brancherInstaller();
+}
+
+function ecranClasse(message) {
+  const d = S.donnees, noms = nomsClasses();
+  const sy = d.synchro || {}, cm = copieMaitre(d);
+  const envoi = sy.dernier_envoi ? "Notes envoyées le " + new Date(sy.dernier_envoi).toLocaleString("fr-FR") + "." : "Vous n'avez encore rien envoyé au directeur.";
+  ecran(noms.join(" + ") || "Ma classe", d.nom_ecole || "",
+    (message || "") + bandeauLicence()
+    + '<button class="ligne-menu" id="b-compos"><span class="ic">📝</span><span>Taper les notes<span class="ex">Les compositions de la classe, activité par activité</span></span></button>'
+    + '<button class="ligne-menu" id="b-eleves"><span class="ic">👧🏾</span><span>Mes élèves<span class="ex">La liste de la classe</span></span></button>'
+    + '<div class="carte"><h2>🔄 Échange avec le directeur</h2>'
+    + '<p class="gris">Classe reçue le ' + (cm.exportee_le ? new Date(+cm.exportee_le * 1000).toLocaleString("fr-FR") : "?") + ".</p>"
+    + '<p class="etat ' + (sy.dernier_envoi ? "ok" : "non") + '">' + esc(envoi) + "</p>"
+    + '<button class="gros vert" id="b-envoyer">📤 Envoyer mes notes au directeur</button>'
+    + '<p class="gris">Le téléphone ouvre le partage : choisissez WhatsApp, puis le directeur. Rien n\'est effacé ici.</p>'
+    + '<button class="gros contour" id="b-maj">📥 Importer une mise à jour de ma classe</button></div>'
+    + '<button class="gros contour" id="b-licence">🔑 Licence</button>'
+    + '<button class="gros contour" id="b-fermer">Fermer ma classe</button>');
+  $("b-compos").onclick = ecranCompositions; $("b-eleves").onclick = ecranEleves;
+  $("b-envoyer").onclick = envoyerNotes; $("b-maj").onclick = () => ecranImporter(ecranClasse);
+  $("b-licence").onclick = () => ecranLicence(ecranClasse);
+  $("b-fermer").onclick = () => { S = null; ecranCode('<div class="message ok">Classe fermée. Vos notes restent dans le téléphone.</div>'); };
+}
+
+function ecranEleves() {
+  let html = "";
+  for (const n of nomsClasses()) {
+    const els = S.donnees.classes[n].eleves || [];
+    const g = els.filter(e => e.sexe === "M").length;
+    html += '<div class="carte"><h2>' + esc(n) + "</h2><p class='gris'>" + els.length + " élève(s) — G : " + g + " · F : " + (els.length - g) + "</p>";
+    els.forEach((el, k) => html += "<p>" + String(k + 1).padStart(2, "0") + ". " + esc(el.prenom) + " <b>" + esc(String(el.nom || "").toUpperCase()) + "</b> (" + esc(el.sexe || "") + ")</p>");
+    html += "</div>";
+  }
+  ecran("Mes élèves", nomsClasses().join(" + "), html, ecranClasse);
+}
+
+function ecranCompositions() {
+  let html = "";
+  for (const n of nomsClasses()) {
+    const classe = S.donnees.classes[n], compos = Object.entries(classe.compositions || {});
+    html += '<div class="carte"><h2>' + esc(n) + "</h2>";
+    if (!compos.length) html += '<p class="gris">Aucune composition. Le directeur la crée sur son ordinateur avec les activités, puis vous renvoie la classe.</p>';
+    for (const [cle, compo] of compos.sort()) {
+      const ms = matieresEnDicts(compo.matieres), faites = ms.filter(m => !baremeIncomplet(m) && matiereComplete(compo, classe, m)).length;
+      html += '<button class="ligne-menu" data-c="' + esc(n) + '" data-k="' + esc(cle) + '"><span class="ic">' + (faites === ms.length && ms.length ? "✅" : "📝")
+           + "</span><span>" + esc(cle) + '<span class="ex">' + faites + " / " + ms.length + " activité(s) remplie(s)</span></span></button>";
+    }
+    html += "</div>";
+  }
+  ecran("Taper les notes", "Choisissez la composition", html, ecranClasse);
+  document.querySelectorAll("[data-k]").forEach(b => b.onclick = () => ecranActivites(b.dataset.c, b.dataset.k));
+}
+
+function ecranActivites(nomClasse, cle, message) {
+  const classe = S.donnees.classes[nomClasse], compo = classe.compositions[cle], ms = matieresEnDicts(compo.matieres);
+  let html = (message || "") + '<div class="carte"><p class="gris">' + (classe.eleves || []).length + " élève(s). Touchez une activité pour taper ses notes.</p></div>";
+  ms.forEach((m, i) => {
+    const inc = baremeIncomplet(m), fait = !inc && matiereComplete(compo, classe, m);
+    const bareme = inc ? "barème à compléter sur l'ordinateur" : m.parties.map(p => p[0] + " /" + texteNote(p[1])).join(" + ");
+    html += '<button class="ligne-menu" data-i="' + i + '"' + (inc ? " disabled" : "") + '><span class="ic">' + (fait ? "✅" : "✏️")
+         + "</span><span>" + esc(m.nom) + '<span class="ex">' + esc(bareme) + (fait ? " · notes saisies" : "") + "</span></span></button>";
+  });
+  ecran(cle, nomClasse, html, ecranCompositions);
+  document.querySelectorAll("[data-i]").forEach(b => b.onclick = () => ecranSaisie(nomClasse, cle, +b.dataset.i));
+}
+
+function ecranSaisie(nomClasse, cle, index, message) {
+  const classe = S.donnees.classes[nomClasse], compo = classe.compositions[cle];
+  const ms = matieresEnDicts(compo.matieres), m = ms[index], els = classe.eleves || [];
+  compo.notes = compo.notes || {};
+  let html = (message || "") + (peutTaper() ? "" : bandeauLicence())
+    + '<div class="carte"><p class="gris">Tapez la note, ou <b>NC</b> si l\'élève n\'a pas composé (compté 0). Virgule acceptée (12,5).'
+    + " Touchez d'abord « Modifier ».</p></div>";
+  els.forEach((el, k) => {
+    const v = (compo.notes[el.id] || {})[m.nom] || [];
+    html += '<div class="eleve"><div class="nom"><span class="num">' + String(k + 1).padStart(2, "0") + ".</span> " + esc(el.prenom) + " "
+         + esc(String(el.nom || "").toUpperCase()) + '</div><div class="parties">';
+    m.parties.forEach((p, j) => html += '<div class="partie"><label>' + esc(p[0]) + " /" + esc(texteNote(p[1])) + "</label>"
+         + '<input type="text" inputmode="decimal" autocomplete="off" data-e="' + k + '" data-p="' + j + '" value="' + esc(v[j] !== undefined ? texteNote(v[j]) : "") + '" disabled></div>');
+    html += "</div></div>";
+  });
+  if (!els.length) html += '<div class="carte"><p>Aucun élève dans cette classe.</p></div>';
+  const barre = '<button class="gros" id="b-modifier">Modifier</button>'
+              + '<button class="gros vert cache" id="b-enreg">Enregistrer</button><button class="gros contour cache" id="b-annuler">Annuler</button>';
+  ecran(m.nom, nomClasse + " · " + cle, html + '<div id="msg"></div>', () => ecranActivites(nomClasse, cle), barre);
+  const cases = [...document.querySelectorAll("input[data-e]")];
+  let ouvert = false, depart = cases.map(c => c.value);
+  avantDeQuitter = () => ouvert && cases.some((c, k) => c.value !== depart[k]);
+  const ouvrir = oui => {
+    ouvert = oui; cases.forEach(c => { c.disabled = !oui; c.classList.remove("faux"); });
+    $("b-modifier").classList.toggle("cache", oui); $("b-enreg").classList.toggle("cache", !oui); $("b-annuler").classList.toggle("cache", !oui);
+  };
+  $("b-modifier").onclick = () => {
+    if (!peutTaper()) return alerte(texteLicence());
+    ouvrir(true); const vide = cases.find(c => !c.value) || cases[0]; if (vide) vide.focus();
+  };
+  $("b-annuler").onclick = () => { cases.forEach((c, k) => c.value = depart[k]); ouvrir(false); $("barre-msg").innerHTML = ""; };
+  cases.forEach((c, k) => c.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); (cases[k + 1] || $("b-enreg")).focus(); } });
+  $("b-enreg").onclick = async () => {
+    const erreur = (t, c) => { if (c) { c.classList.add("faux"); c.focus(); c.scrollIntoView({block: "center"}); }
+                               $("barre-msg").innerHTML = '<div class="message erreur" style="margin:0 0 8px">' + esc(t) + "</div>"; };
+    cases.forEach(c => c.classList.remove("faux")); $("barre-msg").innerHTML = "";
+    const nouvelles = {};
+    for (let k = 0; k < els.length; k++) {
+      const el = els[k], nomEl = el.prenom + " " + el.nom, valeurs = [];
+      for (let j = 0; j < m.parties.length; j++) {
+        const c = cases.find(x => +x.dataset.e === k && +x.dataset.p === j), p = m.parties[j];
+        const r = lireNote(c.value, maxiPartie(p));
+        if (r.erreur === "vide") return erreur("Vous n'avez pas saisi la note de " + nomEl + (m.parties.length > 1 ? " (" + p[0] + ")" : "") + ". Tapez sa note, ou « NC » s'il n'a pas composé.", c);
+        if (r.erreur === "pas un nombre") return erreur(nomEl + " (" + p[0] + ") : tapez un nombre, ou « NC » s'il n'a pas composé.", c);
+        if (r.erreur) return erreur(nomEl + " (" + p[0] + ") : la note doit être entre 0 et " + texteNote(p[1]) + ".", c);
+        valeurs.push(r.note);
+      }
+      if (valeurs.includes("absent") && valeurs.some(v => v !== "absent"))
+        return erreur(nomEl + " : s'il n'a pas composé, tapez « NC » dans toutes les cases de l'activité.", cases.find(x => +x.dataset.e === k));
+      nouvelles[el.id] = valeurs;
+    }
+    const sauvegarde = strJ(compo.notes);
+    for (const [id, valeurs] of Object.entries(nouvelles)) (compo.notes[id] = compo.notes[id] || {})[m.nom] = valeurs;
+    attente(true, "Enregistrement…");
+    const ok = await garderClasse(); attente(false);
+    if (!ok) { compo.notes = parseJ(sauvegarde); return; }
+    avantDeQuitter = null;
+    const suivante = ms.findIndex((x, i) => i > index && !baremeIncomplet(x) && !matiereComplete(compo, classe, x));
+    if (suivante >= 0) return ecranSaisie(nomClasse, cle, suivante, '<div class="message ok">✓ Notes de ' + esc(m.nom) + " enregistrées. Voici l'activité suivante.</div>");
+    ecranActivites(nomClasse, cle, '<div class="message ok">✓ Notes de ' + esc(m.nom) + " enregistrées.</div>");
+  };
+}
+
+async function envoyerNotes() {
+  const d = S.donnees, maintenant = Math.floor(Date.now() / 1000);
+  const envoi = copieJ(d);
+  envoi.synchro = envoi.synchro || {};
+  delete envoi.synchro.envoye_tel;
+  envoi.synchro.envoi_maitre = {code: S.code.slice(0, 3), classes: nomsClasses(), prof: null, envoye_le: new Num(maintenant), par: "TEL-" + codeTelephone()};
+  attente(true, "Préparation du fichier…");
+  let texte;
+  try {
+    const jeton = await fernetChiffrer(S.cle, enc.encode(strJ(envoi)));
+    texte = JSON.stringify({format: "GestionExamEvaluations-1", sel: S.sel, donnees: jeton, acces: []});
+  } catch (e) { attente(false); return alerte("Le fichier n'a pas pu être préparé."); }
+  attente(false);
+  const r = await partagerFichier(nomFichierNotes(), texte);
+  if (r === "annule") return;
+  d.synchro = d.synchro || {};
+  d.synchro.dernier_envoi = Date.now();
+  d.synchro.envoye_tel = toutesLesNotes(d);           // ce que le directeur a maintenant
+  await garderClasse();
+  ecranClasse('<div class="message ok">✓ Fichier des notes préparé' + (r === "telecharge" ? " et enregistré dans <b>Téléchargements</b>. Envoyez-le au directeur par WhatsApp (trombone › Document)." : " et partagé.") + "</div>");
+}
+
+function ecranLicence(retour, message) {
+  const code = codeTelephone();
+  ecran("Licence", "Licence maître / professeur",
+    (message || "") + bandeauLicence()
+    + '<div class="carte"><h2>1. Code de ce téléphone</h2><div class="code-tel">' + esc(code) + "</div>"
+    + '<p class="gris">Envoyez ce code au concepteur (' + AUTEUR + ") et demandez une <b>licence maître / professeur</b>.</p>"
+    + '<button class="gros contour" id="b-copier">Copier le code</button></div>'
+    + '<div class="carte"><h2>2. Licence reçue</h2><p class="gris">Collez ici la licence reçue (elle commence par MAITRE-).</p>'
+    + '<textarea id="lic" rows="4" autocomplete="off" autocapitalize="characters"></textarea>'
+    + '<button class="gros" id="b-activer">Activer la licence</button><div id="msg"></div></div>',
+    retour);
+  $("b-copier").onclick = async () => {
+    try { await navigator.clipboard.writeText(code); $("msg").innerHTML = '<div class="message ok">Code copié : collez-le dans votre message WhatsApp.</div>'; }
+    catch (e) { $("msg").innerHTML = '<div class="message info">Recopiez le code à la main : ' + esc(code) + "</div>"; }
+  };
+  $("b-activer").onclick = async () => {
+    const t = $("lic").value, lue = lireTexteLicence(t), msg = (c, x) => $("msg").innerHTML = '<div class="message ' + c + '">' + esc(x) + "</div>";
+    if (!lue) return msg("erreur", "Ce texte n'est pas une licence. Recopiez-la en entier.");
+    if (lue.genre !== "maitre") return msg("erreur", "C'est une licence ÉCOLE (pour l'ordinateur de l'école). Sur le téléphone, il faut une licence maître / professeur.");
+    attente(true, "Vérification de la licence…"); const ok = await licenceAuthentique(lue, code); attente(false);
+    if (!ok) return msg("erreur", "Licence refusée : elle n'a pas été faite pour ce téléphone (ou elle a été mal recopiée).");
+    M.licence = t.replace(/\s+/g, ""); garderMemoire(); await verifierLicence();
+    ecranLicence(retour, '<div class="message ok">✓ Licence activée.</div>');
+  };
+}
+
+/* ---------- 11. Installer sur l'écran d'accueil ---------- */
+let demandeInstallation = null;
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); demandeInstallation = e; const b = $("b-installer"); if (b) b.classList.remove("cache"); });
+const installee = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+function boutonInstaller() {
+  if (installee()) return "";
+  return '<div class="carte"><h2>📲 Installer sur le téléphone</h2>'
+    + '<p class="gris">Pour l\'avoir comme une application, sans Internet : menu <b>⋮</b> de Chrome (en haut à droite), puis <b>« Ajouter à l\'écran d\'accueil »</b> ou <b>« Installer l\'application »</b>.</p>'
+    + '<button class="gros contour' + (demandeInstallation ? "" : " cache") + '" id="b-installer">Installer l\'application</button></div>';
+}
+function brancherInstaller() {
+  const b = $("b-installer"); if (!b) return;
+  b.onclick = async () => { if (!demandeInstallation) return; demandeInstallation.prompt(); await demandeInstallation.userChoice; demandeInstallation = null; b.classList.add("cache"); };
+}
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+
+demarrer();
+</script>
+</body>
+</html>

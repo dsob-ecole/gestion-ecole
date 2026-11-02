@@ -1,0 +1,16 @@
+{
+  "name": "GestionÉcole — Espace du maître",
+  "short_name": "GestionÉcole",
+  "description": "Taper les notes de sa classe sur son téléphone, sans Internet, et les envoyer au directeur.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#C62828",
+  "icons": [
+    {"src": "icone-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "icone-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}
