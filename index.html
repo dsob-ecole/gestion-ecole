@@ -238,36 +238,47 @@ function codeTelephone() {
   return M.code_tel;
 }
 
-/* ---------- 6. Licence : essai de 7 jours, puis licence maître / professeur ---------- */
+/* ---------- 6. Licence : c'est l'école qui paie. Sa licence arrive dans le fichier de la classe. ---------- */
 let LIC = {statut: "essai"};
+async function licenceEcoleLue(lic) {      // {texte, ordinateur} : signée par DSOB pour l'ordinateur de l'école
+  if (!lic || typeof lic !== "object") return null;
+  const lue = lireTexteLicence(String(lic.texte || ""));
+  if (!lue || lue.genre !== "ecole") return null;
+  return (await licenceAuthentique(lue, String(lic.ordinateur || ""))) ? lue : null;
+}
 async function verifierLicence() {
   const maintenant = Date.now();
   if (!M.premier_jour) { M.premier_jour = maintenant; garderMemoire(); }
   if (M.horloge && maintenant < M.horloge - 86400000) { LIC = {statut: "horloge"}; return LIC; }
   M.horloge = Math.max(M.horloge || 0, maintenant); garderMemoire();
-  const lue = M.licence ? lireTexteLicence(M.licence) : null;
-  if (lue && lue.genre === "maitre" && await licenceAuthentique(lue, codeTelephone())) {
+  const ecole = await licenceEcoleLue(M.licence_ecole);
+  const ancienne = M.licence ? lireTexteLicence(M.licence) : null;     // anciennes licences maître (avant l'étape 250)
+  const lue = ecole || (ancienne && ancienne.genre === "maitre" && await licenceAuthentique(ancienne, codeTelephone()) ? ancienne : null);
+  if (lue) {
     const premiere = +lue.annee.slice(0, 4), fin = new Date(premiere + 1, 7, 31, 23, 59, 59);
     const jours = Math.ceil((fin - maintenant) / 86400000);
     if (maintenant > fin) LIC = {statut: "expiree", annee: lue.annee, fin};
     else if (maintenant < new Date(premiere, MOIS_ACTIVATION - 1, 1)) LIC = {statut: "pas_encore", annee: lue.annee};
     else LIC = {statut: "valide", annee: lue.annee, fin, jours};
-    return LIC;
+    LIC.ecole = !!ecole;
+    if (LIC.statut === "valide") return LIC;
   }
   const debut = new Date(M.premier_jour); debut.setHours(0, 0, 0, 0);
   const finEssai = new Date(debut.getTime() + ESSAI_JOURS * 86400000 - 1);
   const reste = Math.ceil((finEssai - maintenant) / 86400000);
-  LIC = maintenant <= finEssai ? {statut: "essai", fin: finEssai, jours: Math.max(1, reste)} : {statut: "essai_termine", fin: finEssai};
+  if (maintenant <= finEssai) LIC = {statut: "essai", fin: finEssai, jours: Math.max(1, reste)};
+  else if (!lue) LIC = {statut: "essai_termine", fin: finEssai};     // sinon : licence expirée ou pas encore valable
   return LIC;
 }
 const peutTaper = () => LIC.statut === "valide" || LIC.statut === "essai";
 const dateFr = d => new Date(d).toLocaleDateString("fr-FR");
 function texteLicence() {
   switch (LIC.statut) {
-    case "valide": return "Licence " + LIC.annee + " : valable jusqu'au " + dateFr(LIC.fin) + " (" + LIC.jours + " jour(s)).";
+    case "valide": return (LIC.ecole ? "Licence de l'école " : "Licence ") + LIC.annee + " : valable jusqu'au " + dateFr(LIC.fin) + " (" + LIC.jours + " jour(s))."
+                      + (LIC.ecole ? " Votre école l'a payée : vous n'avez rien à payer." : "");
     case "essai": return "Essai gratuit : encore " + LIC.jours + " jour" + (LIC.jours > 1 ? "s" : "") + " (jusqu'au " + dateFr(LIC.fin) + ").";
-    case "essai_termine": return "L'essai gratuit de " + ESSAI_JOURS + " jours est terminé. Vous ne pouvez plus taper de notes : activez une licence. Vous pouvez encore envoyer les notes déjà tapées.";
-    case "expiree": return "La licence " + LIC.annee + " a expiré le " + dateFr(LIC.fin) + ". Renouvelez-la pour taper des notes. Vous pouvez encore envoyer les notes déjà tapées.";
+    case "essai_termine": return "L'essai gratuit de " + ESSAI_JOURS + " jours est terminé : votre école n'a pas encore sa licence de cette année. Vous n'avez rien à payer : parlez-en à votre directeur. Quand l'école aura sa licence, il vous renverra votre classe. Vous pouvez encore envoyer les notes déjà tapées.";
+    case "expiree": return "La licence de l'école " + LIC.annee + " a expiré le " + dateFr(LIC.fin) + ". Quand l'école aura sa nouvelle licence, demandez au directeur de vous renvoyer votre classe. Vous pouvez encore envoyer les notes déjà tapées.";
     case "pas_encore": return "Cette licence " + LIC.annee + " ne peut servir qu'à partir du 1er septembre " + LIC.annee.slice(0, 4) + ".";
     case "horloge": return "La date de ce téléphone est en retard. Remettez la bonne date et la bonne heure dans les Paramètres, puis rouvrez l'application.";
   }
@@ -485,7 +496,9 @@ function ecranImporter(retour) {
     }
     S = {donnees: ouvert.donnees, cle: ouvert.cle, sel: ouvert.sel, code};
     M.classe = {fichier: {format: contenu.format, sel: contenu.sel, donnees: contenu.donnees, acces: contenu.acces}, donnees: ""};
+    if (await licenceEcoleLue(ouvert.donnees.licence_ecole)) M.licence_ecole = copieJ(ouvert.donnees.licence_ecole);
     if (!(await garderClasse())) return;
+    await verifierLicence();
     ecranClasse('<div class="message ok">✓ Classe ' + (mise_a_jour ? "mise à jour" : "installée") + " sur ce téléphone."
       + (gardes ? "<br>" + gardes + " note(s) tapée(s) ici et pas encore envoyée(s) ont été gardées." : "") + "</div>");
   };
@@ -673,29 +686,17 @@ async function envoyerNotes() {
 }
 
 function ecranLicence(retour, message) {
-  const code = codeTelephone();
-  ecran("Licence", "Licence maître / professeur",
+  ecran("Licence", "Licence de l'école",
     (message || "") + bandeauLicence()
-    + '<div class="carte"><h2>1. Code de ce téléphone</h2><div class="code-tel">' + esc(code) + "</div>"
-    + '<p class="gris">Envoyez ce code au concepteur (' + AUTEUR + ") et demandez une <b>licence maître / professeur</b>.</p>"
-    + '<button class="gros contour" id="b-copier">Copier le code</button></div>'
-    + '<div class="carte"><h2>2. Licence reçue</h2><p class="gris">Collez ici la licence reçue (elle commence par MAITRE-).</p>'
-    + '<textarea id="lic" rows="4" autocomplete="off" autocapitalize="characters"></textarea>'
-    + '<button class="gros" id="b-activer">Activer la licence</button><div id="msg"></div></div>',
+    + '<div class="carte"><h2>Qui paie ?</h2>'
+    + "<p>C'est <b>l'école</b> qui paie sa licence de l'année. Ses maîtres et professeurs ont l'application <b>gratuitement</b>.</p>"
+    + '<p class="gris">La licence de l\'école arrive toute seule dans le fichier de votre classe, quand le directeur vous l\'envoie '
+    + "depuis l'ordinateur de l'école. Vous n'avez aucun code de licence à taper.</p>"
+    + '<p class="gris">Nouvelle année scolaire : quand l\'école a sa nouvelle licence, le directeur vous renvoie votre classe ; '
+    + "importez-la avec « Importer une mise à jour de ma classe ».</p></div>"
+    + (M.classe ? '<button class="gros contour" id="b-maj">📥 Importer une mise à jour de ma classe</button>' : ""),
     retour);
-  $("b-copier").onclick = async () => {
-    try { await navigator.clipboard.writeText(code); $("msg").innerHTML = '<div class="message ok">Code copié : collez-le dans votre message WhatsApp.</div>'; }
-    catch (e) { $("msg").innerHTML = '<div class="message info">Recopiez le code à la main : ' + esc(code) + "</div>"; }
-  };
-  $("b-activer").onclick = async () => {
-    const t = $("lic").value, lue = lireTexteLicence(t), msg = (c, x) => $("msg").innerHTML = '<div class="message ' + c + '">' + esc(x) + "</div>";
-    if (!lue) return msg("erreur", "Ce texte n'est pas une licence. Recopiez-la en entier.");
-    if (lue.genre !== "maitre") return msg("erreur", "C'est une licence ÉCOLE (pour l'ordinateur de l'école). Sur le téléphone, il faut une licence maître / professeur.");
-    attente(true, "Vérification de la licence…"); const ok = await licenceAuthentique(lue, code); attente(false);
-    if (!ok) return msg("erreur", "Licence refusée : elle n'a pas été faite pour ce téléphone (ou elle a été mal recopiée).");
-    M.licence = t.replace(/\s+/g, ""); garderMemoire(); await verifierLicence();
-    ecranLicence(retour, '<div class="message ok">✓ Licence activée.</div>');
-  };
+  if ($("b-maj")) $("b-maj").onclick = () => S ? ecranImporter(() => ecranLicence(retour)) : ecranImporter(() => ecranLicence(retour));
 }
 
 /* ---------- 11. Installer sur l'écran d'accueil ---------- */
