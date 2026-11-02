@@ -374,6 +374,7 @@ function nomFichierNotes() {
        + "-" + z(d.getDate()) + "_" + z(d.getHours()) + "h" + z(d.getMinutes()) + ".notes";
 }
 async function partagerFichier(nom, texte) {
+  if (window.Android && Android.partager) { Android.partager(nom, texte); return "partage"; }   // application Android (APK)
   const fichier = new File([texte], nom, {type: "application/octet-stream"});
   if (navigator.canShare && navigator.canShare({files: [fichier]})) {
     try { await navigator.share({files: [fichier], title: nom, text: "Notes de ma classe (fichier pour le directeur)"}); return "partage"; }
@@ -405,6 +406,11 @@ function ecran(titre, sous, html, retour, barre) {
 }
 let ecranRetour = null;
 history.pushState({app: 1}, "");
+function retourAndroid() {          // APK : bouton « retour » du téléphone ; false = quitter l'application
+  if (!ecranRetour) return false;
+  if (peutQuitter()) ecranRetour();
+  return true;
+}
 window.addEventListener("popstate", () => {         // bouton « retour » d'Android
   history.pushState({app: 1}, "");
   if (ecranRetour && peutQuitter()) ecranRetour();
@@ -704,7 +710,7 @@ let demandeInstallation = null;
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); demandeInstallation = e; const b = $("b-installer"); if (b) b.classList.remove("cache"); });
 const installee = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
 function boutonInstaller() {
-  if (installee()) return "";
+  if (installee() || window.Android) return "";
   return '<div class="carte"><h2>📲 Installer sur le téléphone</h2>'
     + '<p class="gris">Pour l\'avoir comme une application, sans Internet : menu <b>⋮</b> de Chrome (en haut à droite), puis <b>« Ajouter à l\'écran d\'accueil »</b> ou <b>« Installer l\'application »</b>.</p>'
     + '<button class="gros contour' + (demandeInstallation ? "" : " cache") + '" id="b-installer">Installer l\'application</button></div>';
@@ -713,7 +719,7 @@ function brancherInstaller() {
   const b = $("b-installer"); if (!b) return;
   b.onclick = async () => { if (!demandeInstallation) return; demandeInstallation.prompt(); await demandeInstallation.userChoice; demandeInstallation = null; b.classList.add("cache"); };
 }
-if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+if ("serviceWorker" in navigator && location.protocol === "https:" && !window.Android) navigator.serviceWorker.register("sw.js").catch(() => {});
 
 demarrer();
 </script>
