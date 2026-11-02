@@ -103,12 +103,33 @@ ecrire("app/src/main/AndroidManifest.xml", """
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|keyboardHidden|keyboard|screenLayout|uiMode"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- fichier « Classe_… .classe » touché dans WhatsApp : « Ouvrir avec GestionÉcole » -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:mimeType="application/classe" />
+            </intent-filter>
+            <!-- appui long sur le fichier, puis « Partager » > GestionÉcole -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
         <provider
@@ -136,7 +157,9 @@ package sn.dsob.gestionecole;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.database.Cursor;
 import android.net.Uri;
+import android.provider.OpenableColumns;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -151,8 +174,12 @@ import android.widget.Toast;
 import androidx.core.content.FileProvider;
 import androidx.webkit.WebViewAssetLoader;
 
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
 // L'application du téléphone (index.html) est rangée DANS l'APK : elle marche sans Internet.
@@ -160,6 +187,7 @@ public class MainActivity extends Activity {
     private static final int CHOIX_FICHIER = 7;
     private WebView web;
     private ValueCallback<Uri[]> choix;
+    private String attenteNom = null, attenteTexte = null;     // fichier reçu de WhatsApp, en attente du code
 
     @Override
     protected void onCreate(Bundle etat) {
@@ -206,8 +234,52 @@ public class MainActivity extends Activity {
             }
         });
         web.addJavascriptInterface(new Pont(), "Android");
+        lireIntent(getIntent());
         if (etat != null) web.restoreState(etat);
         else web.loadUrl("https://appassets.androidplatform.net/assets/index.html");
+    }
+
+    @Override
+    protected void onNewIntent(Intent i) {
+        super.onNewIntent(i);
+        setIntent(i);
+        if (lireIntent(i)) web.evaluateJavascript("(window.verifierFichierAndroid && verifierFichierAndroid())", null);
+    }
+
+    // Lit le fichier touché (ou partagé) dans WhatsApp ; la page le prendra avec Android.fichierEnAttente()
+    private synchronized boolean lireIntent(Intent i) {
+        if (i == null) return false;
+        Uri u = null;
+        if (Intent.ACTION_VIEW.equals(i.getAction())) u = i.getData();
+        else if (Intent.ACTION_SEND.equals(i.getAction())) u = i.getParcelableExtra(Intent.EXTRA_STREAM);
+        if (u == null) return false;
+        try (InputStream in = getContentResolver().openInputStream(u)) {
+            ByteArrayOutputStream b = new ByteArrayOutputStream();
+            byte[] t = new byte[8192];
+            int n;
+            while ((n = in.read(t)) > 0) {
+                b.write(t, 0, n);
+                if (b.size() > 30000000) break;
+            }
+            attenteTexte = new String(b.toByteArray(), StandardCharsets.UTF_8);
+            attenteNom = nomDuFichier(u);
+            i.setAction(Intent.ACTION_MAIN);          // ne pas relire le même fichier en tournant l'écran
+            return true;
+        } catch (Exception e) {
+            Toast.makeText(this, "Impossible de lire ce fichier : " + e.getMessage(), Toast.LENGTH_LONG).show();
+            return false;
+        }
+    }
+
+    private String nomDuFichier(Uri u) {
+        try (Cursor c = getContentResolver().query(u, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int k = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (k >= 0) return c.getString(k);
+            }
+        } catch (Exception e) { }
+        String p = u.getLastPathSegment();
+        return p == null ? "" : p;
     }
 
     @Override
@@ -235,6 +307,21 @@ public class MainActivity extends Activity {
 
     // Envoyer les notes : le fichier part par WhatsApp (ou mail, Bluetooth…)
     public class Pont {
+        @JavascriptInterface
+        public String fichierEnAttente() {
+            synchronized (MainActivity.this) {
+                if (attenteTexte == null) return "";
+                try {
+                    String r = new JSONObject().put("nom", attenteNom).put("texte", attenteTexte).toString();
+                    attenteTexte = null;
+                    attenteNom = null;
+                    return r;
+                } catch (Exception e) {
+                    return "";
+                }
+            }
+        }
+
         @JavascriptInterface
         public void partager(final String nom, final String texte) {
             runOnUiThread(() -> {

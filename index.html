@@ -432,7 +432,90 @@ function lireNote(texte, maxi) {
 /* ---------- 10. Les écrans ---------- */
 async function demarrer() {
   chargerMemoire(); codeTelephone(); await verifierLicence();
-  if (M.classe) return ecranCode(); return ecranAccueil();
+  if (await verifierFichierAndroid()) return;
+  if (M.classe && M.code_garde && await ouvrirClasse(M.code_garde)) return ecranClasse();
+  return ecranCode();
+}
+
+/* ---------- Étape 251 : le fichier .classe touché dans WhatsApp arrive directement ici ---------- */
+let fichierRecu = null;           // {nom, contenu} en attente du code
+async function verifierFichierAndroid() {
+  if (!(window.Android && Android.fichierEnAttente)) return false;
+  let t = ""; try { t = Android.fichierEnAttente(); } catch (e) {}
+  if (!t) return false;
+  let r; try { r = JSON.parse(t); } catch (e) { return false; }
+  let contenu = null; try { contenu = JSON.parse(r.texte); } catch (e) {}
+  if (!contenu || !String(contenu.format || "").startsWith("GestionExamEvaluations") || !contenu.acces) {
+    ecranCode('<div class="message erreur">Ce fichier n\'est pas un fichier de classe du logiciel (« Classe_… .classe »).</div>');
+    return true;
+  }
+  if (!peutQuitter()) { fichierRecu = {nom: r.nom || "", contenu}; return true; }
+  fichierRecu = {nom: r.nom || "", contenu};
+  const code = (S && S.code) || M.code_garde;
+  if (code) {                       // code déjà connu : on installe tout de suite
+    const res = await importerContenu(contenu, code);
+    if (res.ok) { fichierRecu = null; ecranClasse(res.message); return true; }
+  }
+  ecranCode();
+  return true;
+}
+// Ouvre la classe déjà rangée dans le téléphone avec ce code ; vrai si c'est le bon code.
+async function ouvrirClasse(code) {
+  if (!M.classe) return false;
+  const o = await ouvrirAvecCode(M.classe.fichier, code);
+  if (!o) return false;
+  try { o.donnees = parseJ(dec.decode(await fernetDechiffrer(o.cle, M.classe.donnees))); } catch (e) {}
+  S = {donnees: o.donnees, cle: o.cle, sel: o.sel, code};
+  await verifierLicence();
+  return true;
+}
+function normaliserCode(t) {
+  let code = String(t || "").replace(/\s/g, "").toUpperCase();
+  if (/^[EP]\d{2}[A-Z0-9]{6}$/.test(code)) code = code.slice(0, 3) + "-" + code.slice(3);
+  return /^[EP]\d{2}-[A-Z0-9]{6}$/.test(code) ? code : "";
+}
+// Installe (ou met à jour) la classe contenue dans un fichier reçu du directeur.
+async function importerContenu(contenu, code) {
+  attente(true, "Vérification du code…\n(quelques secondes)");
+  let ouvert = null; try { ouvert = await ouvrirAvecCode(contenu, code); } catch (e) {}
+  attente(false);
+  if (!ouvert) return {ok: false, code: true};
+  const cm = copieMaitre(ouvert.donnees);
+  if (!cm.code || cm.code !== code.slice(0, 3)) return {ok: false, texte: "Ce fichier n'est pas un fichier de classe préparé pour vous par le directeur."};
+  const mise_a_jour = !!M.classe;
+  let gardes = 0;
+  if (mise_a_jour) {
+    if (!S || S.code !== code) {
+      if (!(await ouvrirClasse(code)))
+        return {ok: false, texte: "Une autre classe est déjà sur ce téléphone, avec un autre code. Tapez le code de cette classe-là pour la mettre à jour."};
+    }
+    const avant = copieMaitre(S.donnees).exportee_le;
+    if (cm.exportee_le && avant && +cm.exportee_le < +avant &&
+        !confirm("Ce fichier est PLUS ANCIEN que celui déjà installé. L'installer quand même ?")) return {ok: false, texte: "Rien n'a été changé."};
+    gardes = garderNotesNonEnvoyees(S.donnees, ouvert.donnees);
+  }
+  S = {donnees: ouvert.donnees, cle: ouvert.cle, sel: ouvert.sel, code};
+  M.classe = {fichier: {format: contenu.format, sel: contenu.sel, donnees: contenu.donnees, acces: contenu.acces}, donnees: ""};
+  if (await licenceEcoleLue(ouvert.donnees.licence_ecole)) M.licence_ecole = copieJ(ouvert.donnees.licence_ecole);
+  if (!(await garderClasse())) return {ok: false, texte: "Impossible d'enregistrer dans le téléphone."};
+  await verifierLicence();
+  return {ok: true, message: '<div class="message ok">✓ Classe ' + (mise_a_jour ? "mise à jour" : "installée") + " sur ce téléphone."
+    + (gardes ? "<br>" + gardes + " note(s) tapée(s) ici et pas encore envoyée(s) ont été gardées." : "") + "</div>"};
+}
+function compterErreurCode(msg) {
+  erreursCode++;
+  if (erreursCode >= ESSAIS_MAX) { erreursCode = 0; bloqueJusqua = Date.now() + DUREE_BLOCAGE * 1000;
+    return msg("Code incorrect. Trop d'erreurs : attendez " + DUREE_BLOCAGE + " secondes."); }
+  return msg("Code incorrect. Il vous reste " + (ESSAIS_MAX - erreursCode) + " essai(s).");
+}
+async function choisirEtImporter(code, msg) {
+  const f = await choisirFichier(); if (!f) return;
+  let contenu = null; try { contenu = JSON.parse(await f.text()); } catch (e) {}
+  if (!contenu || !String(contenu.format || "").startsWith("GestionExamEvaluations")) return msg("Ce fichier n'est pas un fichier de classe du logiciel.");
+  const r = await importerContenu(contenu, code);
+  if (r.ok) { erreursCode = 0; return ecranClasse(r.message); }
+  if (r.code) return compterErreurCode(t => msg(t + " (ou ce fichier n'est pas celui de votre classe)"));
+  return msg(r.texte);
 }
 
 function bandeauLicence() {
@@ -440,104 +523,74 @@ function bandeauLicence() {
   return '<div class="message ' + classe + '">' + esc(texteLicence()) + "</div>";
 }
 
-function ecranAccueil(message) {
-  ecran("GestionÉcole", "Espace du maître — sur le téléphone",
-    (message || "") + bandeauLicence() +
-    '<div class="carte"><h1>Bienvenue</h1><p>Avec cette application, vous tapez les notes de votre classe sur votre téléphone, '
-    + "même sans Internet, puis vous les envoyez au directeur par WhatsApp.</p>"
-    + '<p class="gris">Pour commencer, le directeur vous envoie le fichier de votre classe (« Classe_… .classe ») '
-    + "et votre code personnel (E… ou P…).</p>"
-    + '<button class="gros" id="b-importer">📥 Importer ma classe</button>'
-    + '<button class="gros contour" id="b-licence">🔑 Licence</button></div>' + boutonInstaller());
-  $("b-importer").onclick = ecranImporter; $("b-licence").onclick = () => ecranLicence(ecranAccueil);
-  brancherInstaller();
-}
+function ecranAccueil(message) { return ecranCode(message); }
 
 function ecranImporter(retour) {
-  const mise_a_jour = !!M.classe;
-  ecran(mise_a_jour ? "Mettre à jour ma classe" : "Importer ma classe", "Fichier reçu du directeur",
-    '<div class="carte"><h2>1. Votre code personnel</h2>'
-    + '<input type="password" id="code" autocomplete="off" autocapitalize="characters" placeholder="ex : E03-4KQX29">'
-    + '<p><label><input type="checkbox" id="voir"> Voir le code</label></p>'
-    + "<h2 style='margin-top:14px'>2. Le fichier de la classe</h2>"
-    + '<p class="gris">Choisissez le fichier « Classe_… » : dans le dossier <b>Téléchargements</b>, ou dans <b>WhatsApp › Documents</b>.</p>'
-    + '<button class="gros" id="b-choisir">Choisir le fichier et importer</button>'
-    + (mise_a_jour ? '<p class="gris">Les notes tapées ici et pas encore envoyées au directeur sont gardées.</p>' : "")
+  ecran("Mettre à jour ma classe", "Fichier reçu du directeur",
+    '<div class="carte"><h2>Le plus simple</h2>'
+    + '<p>Dans <b>WhatsApp</b>, touchez le fichier « Classe_… » reçu du directeur : il s\'ouvre directement dans GestionÉcole.</p>'
+    + '<p class="gris">Ou bien choisissez-le ici, dans <b>Téléchargements</b> ou <b>Récents</b> :</p>'
+    + '<button class="gros" id="b-choisir">📥 Choisir le fichier de ma classe</button>'
+    + '<p class="gris">Les notes tapées ici et pas encore envoyées au directeur sont gardées.</p>'
     + '<div id="msg"></div></div>',
-    retour || (mise_a_jour ? ecranClasse : ecranAccueil));
-  $("voir").onchange = e => $("code").type = e.target.checked ? "text" : "password";
-  $("b-choisir").onclick = async () => {
-    const msg = t => $("msg").innerHTML = '<div class="message erreur">' + esc(t) + "</div>";
-    if (Date.now() < bloqueJusqua) return msg("Trop d'erreurs. Réessayez dans " + Math.ceil((bloqueJusqua - Date.now()) / 1000) + " secondes.");
-    let code = $("code").value.replace(/\s/g, "").toUpperCase();
-    if (/^[EP]\d{2}[A-Z0-9]{6}$/.test(code)) code = code.slice(0, 3) + "-" + code.slice(3);
-    if (!/^[EP]\d{2}-[A-Z0-9]{6}$/.test(code)) return msg("Tapez d'abord votre code personnel (ex : E03-4KQX29).");
-    const f = await choisirFichier(); if (!f) return;
-    attente(true, "Vérification du code…\n(quelques secondes)");
-    let contenu, ouvert = null;
-    try { contenu = JSON.parse(await f.text()); ouvert = await ouvrirAvecCode(contenu, code); } catch (e) { contenu = null; }
-    attente(false);
-    if (!contenu || !String(contenu.format || "").startsWith("GestionExamEvaluations")) return msg("Ce fichier n'est pas un fichier de classe du logiciel.");
-    if (!ouvert) {
-      erreursCode++;
-      if (erreursCode >= ESSAIS_MAX) { erreursCode = 0; bloqueJusqua = Date.now() + DUREE_BLOCAGE * 1000;
-        return msg("Code incorrect (ou fichier d'une autre classe). Trop d'erreurs : attendez " + DUREE_BLOCAGE + " secondes."); }
-      return msg("Code incorrect, ou ce fichier n'est pas celui de votre classe. Il vous reste " + (ESSAIS_MAX - erreursCode) + " essai(s).");
-    }
-    erreursCode = 0;
-    const cm = copieMaitre(ouvert.donnees);
-    if (!cm.code || cm.code !== code.slice(0, 3)) return msg("Ce fichier n'est pas un fichier de classe préparé pour vous par le directeur.");
-    let gardes = 0;
-    if (mise_a_jour) {
-      if (!S || S.code !== code) {
-        const ancien = await ouvrirAvecCode(M.classe.fichier, code);
-        if (!ancien) return msg("Ce n'est pas le code de la classe déjà installée sur ce téléphone.");
-        try { ancien.donnees = parseJ(dec.decode(await fernetDechiffrer(ancien.cle, M.classe.donnees))); } catch (e) {}
-        S = {donnees: ancien.donnees, cle: ancien.cle, sel: ancien.sel, code};
-      }
-      const avant = copieMaitre(S.donnees).exportee_le;
-      if (cm.exportee_le && avant && +cm.exportee_le < +avant &&
-          !confirm("Ce fichier est PLUS ANCIEN que celui déjà installé. L'installer quand même ?")) return;
-      gardes = garderNotesNonEnvoyees(S.donnees, ouvert.donnees);
-    }
-    S = {donnees: ouvert.donnees, cle: ouvert.cle, sel: ouvert.sel, code};
-    M.classe = {fichier: {format: contenu.format, sel: contenu.sel, donnees: contenu.donnees, acces: contenu.acces}, donnees: ""};
-    if (await licenceEcoleLue(ouvert.donnees.licence_ecole)) M.licence_ecole = copieJ(ouvert.donnees.licence_ecole);
-    if (!(await garderClasse())) return;
-    await verifierLicence();
-    ecranClasse('<div class="message ok">✓ Classe ' + (mise_a_jour ? "mise à jour" : "installée") + " sur ce téléphone."
-      + (gardes ? "<br>" + gardes + " note(s) tapée(s) ici et pas encore envoyée(s) ont été gardées." : "") + "</div>");
-  };
+    retour || ecranClasse);
+  $("b-choisir").onclick = () => choisirEtImporter(S.code, t => $("msg").innerHTML = '<div class="message erreur">' + esc(t) + "</div>");
 }
 
 function ecranCode(message) {
+  const recu = fichierRecu, pasDeClasse = !M.classe && !recu;
   ecran("GestionÉcole", "Espace du maître",
     (message || "") + bandeauLicence()
-    + '<div class="carte"><h1>Ouvrir ma classe</h1><p class="gris">Tapez votre code personnel (E… ou P…).</p>'
+    + '<div class="carte"><h1>Ouvrir ma classe</h1>'
+    + (recu ? '<div class="message ok">📥 Fichier reçu : <b>' + esc(recu.nom || "classe") + "</b><br>Tapez votre code pour l'installer.</div>" : "")
+    + '<p class="gris">Tapez votre code personnel (E… ou P…).</p>'
     + '<input type="password" id="code" autocomplete="off" autocapitalize="characters" placeholder="ex : E03-4KQX29">'
     + '<p><label><input type="checkbox" id="voir"> Voir le code</label></p>'
-    + '<button class="gros" id="b-ouvrir">Ouvrir</button><div id="msg"></div></div>'
+    + '<p><label><input type="checkbox" id="garder" checked> Se souvenir de mon code sur ce téléphone</label></p>'
+    + '<p class="gris" style="margin-top:-4px">La prochaine fois, la classe s\'ouvrira d\'une seule touche. Protégez votre téléphone par un schéma ou un code de verrouillage.</p>'
+    + '<button class="gros" id="b-ouvrir">' + (recu ? "📥 Installer ma classe" : "Ouvrir ma classe") + '</button><div id="msg"></div>'
+    + (pasDeClasse ? '<div id="importer" class="cache"><div class="message info">Votre classe n\'est pas encore sur ce téléphone.</div>'
+       + '<p>Dans <b>WhatsApp</b>, touchez le fichier « Classe_… » reçu du directeur et choisissez <b>GestionÉcole</b> '
+       + '(puis <b>« Toujours »</b>) : il s\'ouvre directement ici.</p>'
+       + '<p class="gris">Ou bien choisissez-le dans le téléphone (<b>Téléchargements</b> ou <b>Récents</b>) :</p>'
+       + '<button class="gros" id="b-importer">📥 Importer le fichier de ma classe</button></div>' : "")
+    + "</div>"
     + '<button class="gros contour" id="b-licence">🔑 Licence</button>' + boutonInstaller());
+  const msg = t => $("msg").innerHTML = '<div class="message erreur">' + esc(t) + "</div>";
   $("voir").onchange = e => $("code").type = e.target.checked ? "text" : "password";
   $("b-licence").onclick = () => ecranLicence(ecranCode);
   $("code").onkeydown = e => { if (e.key === "Enter") $("b-ouvrir").click(); };
+  const lireCode = () => {
+    if (Date.now() < bloqueJusqua) { msg("Trop d'erreurs. Réessayez dans " + Math.ceil((bloqueJusqua - Date.now()) / 1000) + " secondes."); return ""; }
+    const code = normaliserCode($("code").value);
+    if (!code) msg("Tapez votre code personnel (ex : E03-4KQX29).");
+    return code;
+  };
+  const garder = code => { if ($("garder").checked) M.code_garde = code; else delete M.code_garde; garderMemoire(); };
   $("b-ouvrir").onclick = async () => {
-    const msg = t => $("msg").innerHTML = '<div class="message erreur">' + esc(t) + "</div>";
-    if (Date.now() < bloqueJusqua) return msg("Trop d'erreurs. Réessayez dans " + Math.ceil((bloqueJusqua - Date.now()) / 1000) + " secondes.");
-    let code = $("code").value.replace(/\s/g, "").toUpperCase();
-    if (/^[EP]\d{2}[A-Z0-9]{6}$/.test(code)) code = code.slice(0, 3) + "-" + code.slice(3);
-    attente(true, "Vérification du code…");
-    const o = /^[EP]\d{2}-[A-Z0-9]{6}$/.test(code) ? await ouvrirAvecCode(M.classe.fichier, code) : null;
-    if (o) { try { o.donnees = parseJ(dec.decode(await fernetDechiffrer(o.cle, M.classe.donnees))); } catch (e) {} }
-    attente(false);
-    if (!o) {
-      erreursCode++;
-      if (erreursCode >= ESSAIS_MAX) { erreursCode = 0; bloqueJusqua = Date.now() + DUREE_BLOCAGE * 1000;
-        return msg("Code incorrect. Trop d'erreurs : attendez " + DUREE_BLOCAGE + " secondes."); }
-      return msg("Code incorrect. Il vous reste " + (ESSAIS_MAX - erreursCode) + " essai(s).");
+    $("msg").innerHTML = "";
+    const code = lireCode(); if (!code) return;
+    if (fichierRecu) {                                 // fichier touché dans WhatsApp
+      const r = await importerContenu(fichierRecu.contenu, code);
+      if (r.ok) { erreursCode = 0; fichierRecu = null; garder(code); return ecranClasse(r.message); }
+      if (r.code) return compterErreurCode(t => msg(t + " (ou ce fichier n'est pas celui de votre classe)"));
+      return msg(r.texte);
     }
-    erreursCode = 0; S = {donnees: o.donnees, cle: o.cle, sel: o.sel, code};
-    await verifierLicence(); ecranClasse();
+    if (!M.classe) {                                   // première fois : la classe n'est pas encore là
+      $("importer").classList.remove("cache"); $("importer").scrollIntoView({behavior: "smooth"});
+      return;
+    }
+    attente(true, "Vérification du code…");
+    const ok = await ouvrirClasse(code);
+    attente(false);
+    if (!ok) return compterErreurCode(msg);
+    erreursCode = 0; garder(code); ecranClasse();
+  };
+  if ($("b-importer")) $("b-importer").onclick = async () => {
+    const code = lireCode(); if (!code) return;
+    garder(code);
+    await choisirEtImporter(code, msg);
+    if (!S) { delete M.code_garde; garderMemoire(); }
   };
   brancherInstaller();
 }
@@ -557,11 +610,13 @@ function ecranClasse(message) {
     + '<p class="gris">Le téléphone ouvre le partage : choisissez WhatsApp, puis le directeur. Rien n\'est effacé ici.</p>'
     + '<button class="gros contour" id="b-maj">📥 Importer une mise à jour de ma classe</button></div>'
     + '<button class="gros contour" id="b-licence">🔑 Licence</button>'
-    + '<button class="gros contour" id="b-fermer">Fermer ma classe</button>');
+    + '<button class="gros contour" id="b-fermer">🔒 Verrouiller ma classe</button>'
+    + '<p class="gris">Verrouiller : le code sera demandé à la prochaine ouverture (avant de prêter votre téléphone, par exemple).</p>');
   $("b-compos").onclick = ecranCompositions; $("b-eleves").onclick = ecranEleves;
   $("b-envoyer").onclick = envoyerNotes; $("b-maj").onclick = () => ecranImporter(ecranClasse);
   $("b-licence").onclick = () => ecranLicence(ecranClasse);
-  $("b-fermer").onclick = () => { S = null; ecranCode('<div class="message ok">Classe fermée. Vos notes restent dans le téléphone.</div>'); };
+  $("b-fermer").onclick = () => { if (!peutQuitter()) return; S = null; delete M.code_garde; garderMemoire();
+    ecranCode('<div class="message ok">🔒 Classe verrouillée. Vos notes restent dans le téléphone ; le code sera demandé.</div>'); };
 }
 
 function ecranEleves() {
@@ -702,7 +757,7 @@ function ecranLicence(retour, message) {
     + "importez-la avec « Importer une mise à jour de ma classe ».</p></div>"
     + (M.classe ? '<button class="gros contour" id="b-maj">📥 Importer une mise à jour de ma classe</button>' : ""),
     retour);
-  if ($("b-maj")) $("b-maj").onclick = () => S ? ecranImporter(() => ecranLicence(retour)) : ecranImporter(() => ecranLicence(retour));
+  if ($("b-maj")) $("b-maj").onclick = () => S ? ecranImporter(() => ecranLicence(retour)) : ecranCode();
 }
 
 /* ---------- 11. Installer sur l'écran d'accueil ---------- */
