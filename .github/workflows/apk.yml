@@ -1,0 +1,46 @@
+name: Fabriquer l'application Android (APK)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Preparer le projet Android
+        env:
+          CLE_APK: ${{ secrets.CLE_APK }}
+          NUMERO: ${{ github.run_number }}
+        run: python3 fabriquer_apk.py
+
+      - name: Fabriquer l'APK
+        working-directory: apk_projet
+        run: gradle assembleRelease --no-daemon
+
+      - name: Nommer le fichier
+        run: cp apk_projet/app/build/outputs/apk/release/app-release.apk GestionEcole.apk
+
+      - name: Publier l'APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: GestionEcole telephone 1.${{ github.run_number }}
+          body: "Application Android pour les maitres et professeurs. Telecharger GestionEcole.apk ci-dessous."
+          make_latest: true
+          files: GestionEcole.apk
