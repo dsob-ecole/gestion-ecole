@@ -43,7 +43,7 @@
   .parties { display: flex; flex-wrap: wrap; gap: 10px; }
   .partie { flex: 1 1 130px; } .partie label { display: block; font-size: 14px; color: var(--gris); margin-bottom: 3px; }
   .partie input { text-align: center; font-size: 24px; font-weight: bold; padding: 10px; }
-  .partie input:disabled { background: #F7F7F7; color: var(--texte); border-color: #EEE; }
+  .partie input:disabled { background: #F2F2F2; color: var(--texte); -webkit-text-fill-color: var(--texte); opacity: 1; border-color: #E2E2E2; }
   .partie input.faux { border-color: var(--rouge); background: var(--rose); }
   .barre-bas { position: fixed; left: 0; right: 0; bottom: 0; background: white; border-top: 1px solid var(--trait);
                padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); z-index: 6; }
@@ -329,6 +329,9 @@ function toutesLesNotes(d) {
     for (const [cle, compo] of Object.entries(c.compositions || {}))
       for (const [el, ns] of Object.entries((compo || {}).notes || {}))
         for (const [mat, v] of Object.entries(ns || {})) r[c.id + "|" + cle + "|" + el + "|" + mat] = strJ(v);
+    for (const [cle, sem] of Object.entries(c.semestres || {}))
+      for (const [el, ns] of Object.entries((sem || {}).notes || {}))
+        for (const [mat, v] of Object.entries(ns || {})) r[c.id + "|SEM:" + cle + "|" + el + "|" + mat] = strJ(v);
   }
   return r;
 }
@@ -346,6 +349,12 @@ function garderNotesNonEnvoyees(ancienne, nouvelle) {
     if (!(k in L)) continue;
     const [cid, cle, el, mat] = k.split("|"), dest = parId[cid], src = lecture[cid];
     if (!dest || !src) continue;
+    if (cle.startsWith("SEM:")) {                      // collège / lycée : note d'un semestre
+      const sc = cle.slice(4); dest.semestres = dest.semestres || {};
+      const sem = (dest.semestres[sc] = dest.semestres[sc] || {notes: {}, assiduite: {}}); sem.notes = sem.notes || {};
+      (sem.notes[el] = sem.notes[el] || {})[mat] = copieJ(src.semestres[sc].notes[el][mat]);
+      gardes++; continue;
+    }
     dest.compositions = dest.compositions || {};
     if (!dest.compositions[cle]) {
       const meta = copieJ(src.compositions[cle]); meta.notes = {}; dest.compositions[cle] = meta;
@@ -598,21 +607,22 @@ function ecranCode(message) {
 function ecranClasse(message) {
   const d = S.donnees, noms = nomsClasses();
   const sy = d.synchro || {}, cm = copieMaitre(d);
-  const envoi = sy.dernier_envoi ? "Notes envoyées le " + new Date(sy.dernier_envoi).toLocaleString("fr-FR") + "." : "Vous n'avez encore rien envoyé au directeur.";
+  const envoi = sy.dernier_envoi ? "Notes envoyées le " + new Date(sy.dernier_envoi).toLocaleString("fr-FR") + "." : (estProf() ? "Vous n'avez encore rien envoyé à l'établissement." : "Vous n'avez encore rien envoyé au directeur.");
   ecran(noms.join(" + ") || "Ma classe", d.nom_ecole || "",
     (message || "") + bandeauLicence()
-    + '<button class="ligne-menu" id="b-compos"><span class="ic">📝</span><span>Taper les notes<span class="ex">Les compositions de la classe, activité par activité</span></span></button>'
+    + '<button class="ligne-menu" id="b-compos"><span class="ic">📝</span><span>Taper les notes<span class="ex">'
+    + (estProf() ? "Vos matières, semestre par semestre" : "Les compositions de la classe, activité par activité") + '</span></span></button>'
     + '<button class="ligne-menu" id="b-eleves"><span class="ic">👧🏾</span><span>Mes élèves<span class="ex">La liste de la classe</span></span></button>'
-    + '<div class="carte"><h2>🔄 Échange avec le directeur</h2>'
+    + '<div class="carte"><h2>🔄 Échange avec ' + (estProf() ? "l'établissement" : "le directeur") + '</h2>'
     + '<p class="gris">Classe reçue le ' + (cm.exportee_le ? new Date(+cm.exportee_le * 1000).toLocaleString("fr-FR") : "?") + ".</p>"
     + '<p class="etat ' + (sy.dernier_envoi ? "ok" : "non") + '">' + esc(envoi) + "</p>"
-    + '<button class="gros vert" id="b-envoyer">📤 Envoyer mes notes au directeur</button>'
-    + '<p class="gris">Le téléphone ouvre le partage : choisissez WhatsApp, puis le directeur. Rien n\'est effacé ici.</p>'
+    + '<button class="gros vert" id="b-envoyer">📤 Envoyer mes notes ' + (estProf() ? "à l'établissement" : "au directeur") + '</button>'
+    + '<p class="gris">Le téléphone ouvre le partage : choisissez WhatsApp, puis ' + (estProf() ? "l'établissement" : "le directeur") + '. Rien n\'est effacé ici.</p>'
     + '<button class="gros contour" id="b-maj">📥 Importer une mise à jour de ma classe</button></div>'
     + '<button class="gros contour" id="b-licence">🔑 Licence</button>'
     + '<button class="gros contour" id="b-fermer">🔒 Verrouiller ma classe</button>'
     + '<p class="gris">Verrouiller : le code sera demandé à la prochaine ouverture (avant de prêter votre téléphone, par exemple).</p>');
-  $("b-compos").onclick = ecranCompositions; $("b-eleves").onclick = ecranEleves;
+  $("b-compos").onclick = () => estProf() ? ecranProfClasses() : ecranCompositions(); $("b-eleves").onclick = ecranEleves;
   $("b-envoyer").onclick = envoyerNotes; $("b-maj").onclick = () => ecranImporter(ecranClasse);
   $("b-licence").onclick = () => ecranLicence(ecranClasse);
   $("b-fermer").onclick = () => { if (!peutQuitter()) return; S = null; delete M.code_garde; garderMemoire();
@@ -665,9 +675,13 @@ function ecranSaisie(nomClasse, cle, index, message) {
   const classe = S.donnees.classes[nomClasse], compo = classe.compositions[cle];
   const ms = matieresEnDicts(compo.matieres), m = ms[index], els = classe.eleves || [];
   compo.notes = compo.notes || {};
+  const suiv = ms.findIndex((x, i) => i > index && !baremeIncomplet(x));
   let html = (message || "") + (peutTaper() ? "" : bandeauLicence())
-    + '<div class="carte"><p class="gris">Tapez la note, ou <b>NC</b> si l\'élève n\'a pas composé (compté 0). Virgule acceptée (12,5).'
-    + " Touchez d'abord « Modifier ».</p></div>";
+    + '<div class="carte"><h2 style="margin:0 0 4px">' + esc(m.nom) + '</h2><p class="gris" style="margin:0 0 6px">'
+    + esc(nomClasse + " · " + cle) + " · " + m.parties.map(p => esc(p[0]) + " /" + esc(texteNote(p[1]))).join(" + ") + "</p>"
+    + '<p class="gris">Tapez la note, ou <b>NC</b> si l\'élève n\'a pas composé (compté 0). Virgule acceptée (12,5).'
+    + " Touchez d'abord « Modifier ».</p>"
+    + (suiv >= 0 ? '<button class="gros contour" id="b-suivante">Suivante : ' + esc(ms[suiv].nom) + " ›</button>" : "") + "</div>";
   els.forEach((el, k) => {
     const v = (compo.notes[el.id] || {})[m.nom] || [];
     html += '<div class="eleve"><div class="nom"><span class="num">' + String(k + 1).padStart(2, "0") + ".</span> " + esc(el.prenom) + " "
@@ -689,8 +703,10 @@ function ecranSaisie(nomClasse, cle, index, message) {
   };
   $("b-modifier").onclick = () => {
     if (!peutTaper()) return alerte(texteLicence());
-    ouvrir(true); const vide = cases.find(c => !c.value) || cases[0]; if (vide) vide.focus();
+    ouvrir(true);
+    if (cases.length && cases.every(c => !c.value)) cases[0].focus();      // activité vide : on commence en haut
   };
+  if ($("b-suivante")) $("b-suivante").onclick = () => { if (peutQuitter()) ecranSaisie(nomClasse, cle, suiv); };
   $("b-annuler").onclick = () => { cases.forEach((c, k) => c.value = depart[k]); ouvrir(false); $("barre-msg").innerHTML = ""; };
   cases.forEach((c, k) => c.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); (cases[k + 1] || $("b-enreg")).focus(); } });
   $("b-enreg").onclick = async () => {
@@ -718,9 +734,126 @@ function ecranSaisie(nomClasse, cle, index, message) {
     const ok = await garderClasse(); attente(false);
     if (!ok) { compo.notes = parseJ(sauvegarde); return; }
     avantDeQuitter = null;
-    const suivante = ms.findIndex((x, i) => i > index && !baremeIncomplet(x) && !matiereComplete(compo, classe, x));
-    if (suivante >= 0) return ecranSaisie(nomClasse, cle, suivante, '<div class="message ok">✓ Notes de ' + esc(m.nom) + " enregistrées. Voici l'activité suivante.</div>");
-    ecranActivites(nomClasse, cle, '<div class="message ok">✓ Notes de ' + esc(m.nom) + " enregistrées.</div>");
+    // on reste sur la même activité : les notes enregistrées restent affichées (verrouillées)
+    ecranSaisie(nomClasse, cle, index, '<div class="message ok">✓ Notes de ' + esc(m.nom) + " enregistrées."
+      + (suiv >= 0 ? " Pour continuer : « Suivante : " + esc(ms[suiv].nom) + " »." : "") + "</div>");
+  };
+}
+
+/* ---------- Collège / lycée : le professeur tape SES notes (3 devoirs + composition, sur 20) ---------- */
+const SEMESTRES = ["1er semestre", "2e semestre"];
+function estProf() { return !!copieMaitre(S && S.donnees).prof; }
+function anneeScolaire() {
+  if (S.donnees.annee_en_cours) return String(S.donnees.annee_en_cours);
+  const d = new Date(), y = d.getMonth() >= 8 ? d.getFullYear() : d.getFullYear() - 1;
+  return y + "-" + (y + 1);
+}
+function matieresDuProf(classe) {
+  const p = copieMaitre(S.donnees).prof;
+  return (classe.matieres || []).map((m, i) => ({m, i})).filter(x => x.m && x.m.prof === p);
+}
+function matiereSaisieSem(classe, cleSem, nom) {
+  const els = classe.eleves || []; if (!els.length) return false;
+  const notes = (((classe.semestres || {})[cleSem] || {}).notes) || {};
+  return els.every(el => { const n = (notes[el.id] || {})[nom] || {}; return [...(n.d || []), n.c].some(v => v !== null && v !== undefined); });
+}
+function ecranProfClasses() {
+  let html = '<div class="carte"><p class="gris">Touchez une classe pour taper les notes de vos matières.</p></div>';
+  for (const n of nomsClasses()) {
+    const c = S.donnees.classes[n], mats = matieresDuProf(c).map(x => x.m.nom);
+    html += '<button class="ligne-menu" data-c="' + esc(n) + '"><span class="ic">🏫</span><span>' + esc(n)
+         + '<span class="ex">' + esc(mats.join(", ") || "aucune matière") + " · " + (c.eleves || []).length + " élève(s)</span></span></button>";
+  }
+  ecran("Taper les notes", "Mes classes · " + anneeScolaire(), html, ecranClasse);
+  document.querySelectorAll("[data-c]").forEach(b => b.onclick = () => ecranProfClasse(b.dataset.c));
+}
+function ecranProfClasse(nomClasse, message) {
+  const c = S.donnees.classes[nomClasse], mats = matieresDuProf(c), an = anneeScolaire();
+  let html = message || "";
+  for (const sem of SEMESTRES) {
+    const cleSem = an + " - " + sem;
+    html += '<div class="carte"><h2>' + esc(sem) + "</h2>";
+    for (const {m, i} of mats) {
+      const fait = matiereSaisieSem(c, cleSem, m.nom);
+      html += '<button class="ligne-menu" data-s="' + esc(cleSem) + '" data-i="' + i + '"><span class="ic">' + (fait ? "✅" : "✏️")
+           + "</span><span>" + esc(m.nom) + '<span class="ex">coef ' + esc(texteNote(m.coef)) + (fait ? " · notes saisies" : " · à faire") + "</span></span></button>";
+    }
+    if (!mats.length) html += '<p class="gris">Aucune matière à votre nom dans cette classe.</p>';
+    html += "</div>";
+  }
+  ecran(nomClasse, "Mes matières · " + an, html, ecranProfClasses);
+  document.querySelectorAll("[data-s]").forEach(b => b.onclick = () => ecranSaisieProf(nomClasse, b.dataset.s, +b.dataset.i));
+}
+function ecranSaisieProf(nomClasse, cleSem, index, message) {
+  const classe = S.donnees.classes[nomClasse], m = classe.matieres[index], els = classe.eleves || [];
+  const mats = matieresDuProf(classe), place = mats.findIndex(x => x.i === index), suiv = mats[place + 1];
+  const sem = ((classe.semestres || {})[cleSem]) || {notes: {}};
+  const titres = ["Devoir 1", "Devoir 2", "Devoir 3", "Composition"];
+  let html = (message || "") + (peutTaper() ? "" : bandeauLicence())
+    + '<div class="carte"><h2 style="margin:0 0 4px">' + esc(m.nom) + '</h2><p class="gris" style="margin:0 0 6px">'
+    + esc(nomClasse + " · " + cleSem.split(" - ").pop()) + " · notes sur 20</p>"
+    + '<p class="gris">Tapez la note, ou <b>NC</b> si l\'élève n\'a pas composé (compté 0). Virgule acceptée (12,5). '
+    + "Laissez vide un devoir qui n'a pas été fait. Touchez d'abord « Modifier ».</p>"
+    + (suiv ? '<button class="gros contour" id="b-suivante">Suivante : ' + esc(suiv.m.nom) + " ›</button>" : "") + "</div>";
+  els.forEach((el, k) => {
+    const n = ((sem.notes || {})[el.id] || {})[m.nom] || {}, v = [...((n.d || []).concat([null, null, null])).slice(0, 3), n.c];
+    html += '<div class="eleve"><div class="nom"><span class="num">' + String(k + 1).padStart(2, "0") + ".</span> " + esc(el.prenom) + " "
+         + esc(String(el.nom || "").toUpperCase()) + '</div><div class="parties">';
+    titres.forEach((t, j) => html += '<div class="partie" style="flex:1 1 70px"><label>' + t + "</label>"
+         + '<input type="text" inputmode="decimal" autocomplete="off" data-e="' + k + '" data-p="' + j + '" value="'
+         + esc(v[j] !== null && v[j] !== undefined ? texteNote(v[j]) : "") + '" disabled></div>');
+    html += "</div></div>";
+  });
+  if (!els.length) html += '<div class="carte"><p>Aucun élève dans cette classe.</p></div>';
+  const barre = '<button class="gros" id="b-modifier">Modifier</button>'
+              + '<button class="gros vert cache" id="b-enreg">Enregistrer</button><button class="gros contour cache" id="b-annuler">Annuler</button>';
+  ecran(m.nom, nomClasse + " · " + cleSem.split(" - ").pop(), html + '<div id="msg"></div>', () => ecranProfClasse(nomClasse), barre);
+  const cases = [...document.querySelectorAll("input[data-e]")];
+  let ouvert = false; const depart = cases.map(c => c.value);
+  avantDeQuitter = () => ouvert && cases.some((c, k) => c.value !== depart[k]);
+  const ouvrir = oui => {
+    ouvert = oui; cases.forEach(c => { c.disabled = !oui; c.classList.remove("faux"); });
+    $("b-modifier").classList.toggle("cache", oui); $("b-enreg").classList.toggle("cache", !oui); $("b-annuler").classList.toggle("cache", !oui);
+  };
+  $("b-modifier").onclick = () => {
+    if (!peutTaper()) return alerte(texteLicence());
+    ouvrir(true);
+    if (cases.length && cases.every(c => !c.value)) cases[0].focus();
+  };
+  if ($("b-suivante")) $("b-suivante").onclick = () => { if (peutQuitter()) ecranSaisieProf(nomClasse, cleSem, suiv.i); };
+  $("b-annuler").onclick = () => { cases.forEach((c, k) => c.value = depart[k]); ouvrir(false); $("barre-msg").innerHTML = ""; };
+  cases.forEach(c => c.onkeydown = e => {          // Entrée = même colonne, élève suivant
+    if (e.key !== "Enter") return; e.preventDefault();
+    const s = cases.find(x => +x.dataset.e === +c.dataset.e + 1 && x.dataset.p === c.dataset.p); (s || $("b-enreg")).focus();
+  });
+  $("b-enreg").onclick = async () => {
+    const erreur = (t, c) => { if (c) { c.classList.add("faux"); c.focus(); c.scrollIntoView({block: "center"}); }
+                               $("barre-msg").innerHTML = '<div class="message erreur" style="margin:0 0 8px">' + esc(t) + "</div>"; };
+    cases.forEach(c => c.classList.remove("faux")); $("barre-msg").innerHTML = "";
+    const nouvelles = {}, manquants = [];
+    for (let k = 0; k < els.length; k++) {
+      const el = els[k], valeurs = [];
+      for (let j = 0; j < 4; j++) {
+        const c = cases.find(x => +x.dataset.e === k && +x.dataset.p === j), r = lireNote(c.value, 20);
+        if (r.erreur === "vide") { valeurs.push(null); continue; }
+        if (r.erreur) return erreur(el.prenom + " " + el.nom + " (" + titres[j] + ") : « " + c.value.trim() + " » n'est pas une note valable (nombre de 0 à 20, ou « NC »).", c);
+        valeurs.push(r.note);
+      }
+      if (valeurs.every(v => v === null)) manquants.push(el.prenom + " " + el.nom);
+      nouvelles[el.id] = {d: valeurs.slice(0, 3), c: valeurs[3]};
+    }
+    classe.semestres = classe.semestres || {};
+    const cible = (classe.semestres[cleSem] = classe.semestres[cleSem] || {notes: {}, assiduite: {}});
+    cible.notes = cible.notes || {};
+    const sauvegarde = strJ(cible.notes);
+    for (const [id, n] of Object.entries(nouvelles)) (cible.notes[id] = cible.notes[id] || {})[m.nom] = n;
+    attente(true, "Enregistrement…");
+    const ok = await garderClasse(); attente(false);
+    if (!ok) { cible.notes = parseJ(sauvegarde); return; }
+    avantDeQuitter = null;
+    ecranSaisieProf(nomClasse, cleSem, index, '<div class="message ' + (manquants.length ? "info" : "ok") + '">✓ Notes de ' + esc(m.nom) + " enregistrées."
+      + (manquants.length ? " Il manque encore les notes de : " + esc(manquants.join(", ")) + "." : "")
+      + (suiv ? " Pour continuer : « Suivante : " + esc(suiv.m.nom) + " »." : "") + "</div>");
   };
 }
 
@@ -729,7 +862,7 @@ async function envoyerNotes() {
   const envoi = copieJ(d);
   envoi.synchro = envoi.synchro || {};
   delete envoi.synchro.envoye_tel;
-  envoi.synchro.envoi_maitre = {code: S.code.slice(0, 3), classes: nomsClasses(), prof: null, envoye_le: new Num(maintenant), par: "TEL-" + codeTelephone()};
+  envoi.synchro.envoi_maitre = {code: S.code.slice(0, 3), classes: nomsClasses(), prof: copieMaitre(d).prof || null, envoye_le: new Num(maintenant), par: "TEL-" + codeTelephone()};
   attente(true, "Préparation du fichier…");
   let texte;
   try {
