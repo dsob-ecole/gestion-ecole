@@ -95,6 +95,8 @@ dependencies {
 ecrire("app/src/main/AndroidManifest.xml", """
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- seulement pour voir s'il existe une nouvelle version (aucune donnée n'est envoyée) -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:label="GestionÉcole"
         android:icon="@mipmap/ic_launcher"
@@ -307,6 +309,15 @@ public class MainActivity extends Activity {
 
     // Envoyer les notes : le fichier part par WhatsApp (ou mail, Bluetooth…)
     public class Pont {
+        @JavascriptInterface
+        public int version() {
+            try {
+                return getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
+            } catch (Exception e) {
+                return 0;
+            }
+        }
+
         @JavascriptInterface
         public String fichierEnAttente() {
             synchronized (MainActivity.this) {

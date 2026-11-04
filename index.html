@@ -54,6 +54,20 @@
               padding: 12px; background: #F2F2F2; border-radius: 10px; color: var(--texte); user-select: all; }
   .pied { text-align: center; color: #999; font-size: 12px; margin-top: 18px; }
   .cache { display: none !important; }
+  .fiche label.t { display: block; font-size: 15px; color: var(--gris); margin: 12px 0 4px; }
+  .fiche input:disabled { background: #F2F2F2; color: var(--texte); -webkit-text-fill-color: var(--texte); opacity: 1; border-color: #E2E2E2; }
+  .fiche input.faux { border-color: var(--rouge); background: var(--rose); }
+  .deux { display: flex; gap: 10px; } .deux > div { flex: 1; min-width: 0; }
+  .choix { display: flex; gap: 8px; } .choix button { flex: 1; font-size: 18px; font-weight: bold; padding: 12px 4px; border-radius: 10px;
+           border: 2px solid #CCC; background: white; color: #555; }
+  .choix button.on { background: var(--rouge); border-color: var(--rouge); color: white; }
+  .choix button:disabled { opacity: 1; } .choix button.on:disabled { opacity: .85; }
+  .etapes { display: flex; gap: 6px; margin: 4px 0 10px; } .etapes div { flex: 1; height: 6px; border-radius: 3px; background: #DDD; }
+  .etapes .on { background: var(--rouge); }
+  .ligne-el { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%; background: white; border: 0;
+              border-bottom: 1px solid #EEE; padding: 12px 14px; font-size: 17px; text-align: left; color: var(--texte); }
+  .ligne-el .p { font-size: 14px; font-weight: bold; white-space: nowrap; } .ligne-el .p.ok { color: var(--vert); } .ligne-el .p.non { color: var(--rouge); }
+  .bandeau-maj { background: #FFF6E0; border: 2px solid #F0C36D; border-radius: 12px; padding: 12px 14px; margin: 0 0 12px; }
   .attente { position: fixed; inset: 0; background: rgba(255,255,255,.85); display: flex; align-items: center;
              justify-content: center; font-size: 20px; font-weight: bold; color: var(--rouge); z-index: 20; text-align: center; padding: 20px; }
 </style>
@@ -329,6 +343,7 @@ function toutesLesNotes(d) {
     for (const [cle, compo] of Object.entries(c.compositions || {}))
       for (const [el, ns] of Object.entries((compo || {}).notes || {}))
         for (const [mat, v] of Object.entries(ns || {})) r[c.id + "|" + cle + "|" + el + "|" + mat] = strJ(v);
+    for (const el of (c.eleves || [])) if (el && el.id) r[c.id + "|ELEVE:|" + el.id + "|"] = strJ(el);
     for (const [cle, sem] of Object.entries(c.semestres || {}))
       for (const [el, ns] of Object.entries((sem || {}).notes || {}))
         for (const [mat, v] of Object.entries(ns || {})) r[c.id + "|SEM:" + cle + "|" + el + "|" + mat] = strJ(v);
@@ -349,6 +364,13 @@ function garderNotesNonEnvoyees(ancienne, nouvelle) {
     if (!(k in L)) continue;
     const [cid, cle, el, mat] = k.split("|"), dest = parId[cid], src = lecture[cid];
     if (!dest || !src) continue;
+    if (cle === "ELEVE:") {                          // étape 254 : élève tapé ou corrigé ici, pas encore envoyé
+      const local = (src.eleves || []).find(x => x && x.id === el); if (!local) continue;
+      dest.eleves = dest.eleves || [];
+      const i = dest.eleves.findIndex(x => x && x.id === el);
+      if (i >= 0) dest.eleves[i] = Object.assign({}, dest.eleves[i], copieJ(local)); else dest.eleves.push(copieJ(local));
+      gardes++; continue;
+    }
     if (cle.startsWith("SEM:")) {                      // collège / lycée : note d'un semestre
       const sc = cle.slice(4); dest.semestres = dest.semestres || {};
       const sem = (dest.semestres[sc] = dest.semestres[sc] || {notes: {}, assiduite: {}}); sem.notes = sem.notes || {};
@@ -441,6 +463,7 @@ function lireNote(texte, maxi) {
 /* ---------- 10. Les écrans ---------- */
 async function demarrer() {
   chargerMemoire(); codeTelephone(); await verifierLicence();
+  setTimeout(verifierMiseAJour, 1500);
   if (await verifierFichierAndroid()) return;
   if (M.classe && M.code_garde && await ouvrirClasse(M.code_garde)) return ecranClasse();
   return ecranCode();
@@ -509,7 +532,7 @@ async function importerContenu(contenu, code) {
   if (!(await garderClasse())) return {ok: false, texte: "Impossible d'enregistrer dans le téléphone."};
   await verifierLicence();
   return {ok: true, message: '<div class="message ok">✓ Classe ' + (mise_a_jour ? "mise à jour" : "installée") + " sur ce téléphone."
-    + (gardes ? "<br>" + gardes + " note(s) tapée(s) ici et pas encore envoyée(s) ont été gardées." : "") + "</div>"};
+    + (gardes ? "<br>" + gardes + " note(s) ou élève(s) tapé(s) ici et pas encore envoyé(s) ont été gardé(s)." : "") + "</div>"};
 }
 function compterErreurCode(msg) {
   erreursCode++;
@@ -527,9 +550,31 @@ async function choisirEtImporter(code, msg) {
   return msg(r.texte);
 }
 
+/* ---------- Étape 254 : une nouvelle version de l'application existe-t-elle ? (APK seulement, avec Internet) ---------- */
+const LIEN_APK = "https://github.com/dsob-ecole/gestion-ecole/releases/latest/download/GestionEcole.apk";
+function versionApp() { try { return window.Android && Android.version ? +Android.version() : 0; } catch (e) { return 0; } }
+async function verifierMiseAJour() {
+  const moi = versionApp(); if (!moi || !navigator.onLine) return;
+  M.maj = M.maj || {};
+  if (M.maj.verif && Date.now() - M.maj.verif < 86400000) return;        // au plus une fois par jour
+  try {
+    const r = await fetch("https://api.github.com/repos/dsob-ecole/gestion-ecole/releases/latest", {cache: "no-store"});
+    if (!r.ok) return;
+    const n = +(String((await r.json()).tag_name || "").replace(/\D+/g, "")) || 0;   // « apk-7 » -> 7 (rien d'autre n'est lu ni envoyé)
+    M.maj = {verif: Date.now(), derniere: n}; garderMemoire();
+    if (n > moi && $("bandeau-maj-place")) $("bandeau-maj-place").innerHTML = bandeauMaj();
+  } catch (e) { /* pas d'Internet : on réessaiera plus tard */ }
+}
+function bandeauMaj() {
+  const moi = versionApp(), n = (M.maj || {}).derniere || 0;
+  if (!moi || n <= moi) return "";
+  return '<div class="bandeau-maj"><b>🔔 Nouvelle version disponible (1.' + n + ").</b><br>"
+       + '<span class="gris">Vos notes et vos élèves sont gardés. Après le téléchargement, touchez « Ouvrir », puis « Mettre à jour ».</span>'
+       + '<a class="gros" href="' + LIEN_APK + '" style="text-decoration:none">Mettre à jour</a></div>';
+}
 function bandeauLicence() {
   const classe = LIC.statut === "valide" ? "ok" : (peutTaper() ? "info" : "erreur");
-  return '<div class="message ' + classe + '">' + esc(texteLicence()) + "</div>";
+  return '<div id="bandeau-maj-place">' + bandeauMaj() + '</div><div class="message ' + classe + '">' + esc(texteLicence()) + "</div>";
 }
 
 function ecranAccueil(message) { return ecranCode(message); }
@@ -612,11 +657,11 @@ function ecranClasse(message) {
     (message || "") + bandeauLicence()
     + '<button class="ligne-menu" id="b-compos"><span class="ic">📝</span><span>Taper les notes<span class="ex">'
     + (estProf() ? "Vos matières, semestre par semestre" : "Les compositions de la classe, activité par activité") + '</span></span></button>'
-    + '<button class="ligne-menu" id="b-eleves"><span class="ic">👧🏾</span><span>Mes élèves<span class="ex">La liste de la classe</span></span></button>'
+    + '<button class="ligne-menu" id="b-eleves"><span class="ic">👧🏾</span><span>Mes élèves<span class="ex">' + (estProf() ? "La liste de la classe" : "La liste de la classe · ajouter ou corriger un élève") + '</span></span></button>'
     + '<div class="carte"><h2>🔄 Échange avec ' + (estProf() ? "l'établissement" : "le directeur") + '</h2>'
     + '<p class="gris">Classe reçue le ' + (cm.exportee_le ? new Date(+cm.exportee_le * 1000).toLocaleString("fr-FR") : "?") + ".</p>"
     + '<p class="etat ' + (sy.dernier_envoi ? "ok" : "non") + '">' + esc(envoi) + "</p>"
-    + '<button class="gros vert" id="b-envoyer">📤 Envoyer mes notes ' + (estProf() ? "à l'établissement" : "au directeur") + '</button>'
+    + '<button class="gros vert" id="b-envoyer">' + (estProf() ? "📤 Envoyer mes notes à l'établissement" : "📤 Envoyer au directeur (notes et élèves)") + '</button>'
     + '<p class="gris">Le téléphone ouvre le partage : choisissez WhatsApp, puis ' + (estProf() ? "l'établissement" : "le directeur") + '. Rien n\'est effacé ici.</p>'
     + '<button class="gros contour" id="b-maj">📥 Importer une mise à jour de ma classe</button></div>'
     + '<button class="gros contour" id="b-licence">🔑 Licence</button>'
@@ -629,16 +674,152 @@ function ecranClasse(message) {
     ecranCode('<div class="message ok">🔒 Classe verrouillée. Vos notes restent dans le téléphone ; le code sera demandé.</div>'); };
 }
 
-function ecranEleves() {
-  let html = "";
+function ecranEleves(message) {
+  let html = message || "";
+  const maitre = !estProf();
   for (const n of nomsClasses()) {
     const els = S.donnees.classes[n].eleves || [];
-    const g = els.filter(e => e.sexe === "M").length;
-    html += '<div class="carte"><h2>' + esc(n) + "</h2><p class='gris'>" + els.length + " élève(s) — G : " + g + " · F : " + (els.length - g) + "</p>";
-    els.forEach((el, k) => html += "<p>" + String(k + 1).padStart(2, "0") + ". " + esc(el.prenom) + " <b>" + esc(String(el.nom || "").toUpperCase()) + "</b> (" + esc(el.sexe || "") + ")</p>");
+    const g = els.filter(e => e.sexe === "M").length, payes = els.filter(e => e.inscription === "Payée").length;
+    html += '<div class="carte" style="padding:14px 0 4px"><h2 style="padding:0 14px">' + esc(n) + "</h2><p class='gris' style='padding:0 14px'>"
+         + els.length + " élève(s) — G : " + g + " · F : " + (els.length - g) + (maitre ? " · " + payes + " inscription(s) payée(s)" : "") + "</p>";
+    if (maitre) html += '<div style="padding:0 14px 8px"><button class="gros" data-ajout="' + esc(n) + '">➕ Ajouter un élève</button></div>';
+    els.forEach((el, k) => html += '<button class="ligne-el" data-c="' + esc(n) + '" data-k="' + k + '"' + (maitre ? "" : " disabled") + '><span>'
+      + String(k + 1).padStart(2, "0") + ". " + esc(el.prenom) + " <b>" + esc(String(el.nom || "").toUpperCase()) + "</b> (" + esc(el.sexe || "") + ")</span>"
+      + (maitre ? '<span class="p ' + (el.inscription === "Payée" ? "ok" : "non") + '">' + (el.inscription === "Payée" ? "Payée" : "Non payée") + "</span>" : "") + "</button>");
+    if (!els.length) html += '<p class="gris" style="padding:0 14px 10px">Aucun élève pour le moment.' + (maitre ? " Touchez « Ajouter un élève »." : "") + "</p>";
     html += "</div>";
   }
   ecran("Mes élèves", nomsClasses().join(" + "), html, ecranClasse);
+  document.querySelectorAll("[data-ajout]").forEach(b => b.onclick = () => ecranFicheEleve(b.dataset.ajout, -1, 1));
+  document.querySelectorAll(".ligne-el[data-k]").forEach(b => b.onclick = () => ecranFicheEleve(b.dataset.c, +b.dataset.k, 1));
+}
+
+/* ---------- Étape 254 : la fiche d'un élève, en deux pages (maquette 2 du 04/11/2026) ---------- */
+const majMots = t => String(t || "").trim().replace(/\s+/g, " ").toLowerCase().replace(/(^|[\s\-'’])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+const simple = t => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z]/g, "");
+const nomValable = t => /^[\p{L}][\p{L} '’\-.]*$/u.test(t);
+function dateValable(t) {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(t); if (!m) return null;
+  const d = new Date(+m[3], +m[2] - 1, +m[1]);
+  return (d.getDate() === +m[1] && d.getMonth() === +m[2] - 1) ? d : null;
+}
+function periodeInscriptions() {
+  const p = +anneeScolaire().slice(0, 4); return [new Date(p, 9, 1), new Date(p + 1, 5, 30)];
+}
+function estCI(nomClasse) { return /^CI\b/.test(nomClasse); }
+function nouvelId() { const r = crypto.getRandomValues(new Uint8Array(6)); return [...r].map(x => x.toString(16).padStart(2, "0")).join(""); }
+let ficheEnCours = null;            // {nomClasse, index, page, v:{…}, ouvert}
+function ecranFicheEleve(nomClasse, index, page, message) {
+  const classe = S.donnees.classes[nomClasse], els = classe.eleves || [];
+  if (!ficheEnCours || ficheEnCours.nomClasse !== nomClasse || ficheEnCours.index !== index) {
+    const el = index >= 0 ? els[index] : {};
+    ficheEnCours = {nomClasse, index, ouvert: index < 0, v: {
+      prenom: el.prenom || "", nom: el.nom || "", sexe: el.sexe || "", statut: el.statut || "",
+      scolarite: el.scolarite !== undefined && el.scolarite !== null ? String(el.scolarite) : "",
+      doublees: el.doublees !== undefined && el.doublees !== null ? String(el.doublees) : (index < 0 ? "0" : ""),
+      inscription: el.inscription || "", date: el.date || "", lieu: el.lieu || "",
+      reg_numero: el.reg_numero || "", reg_annee: el.reg_annee || "", reg_centre: el.reg_centre || ""}};
+    ficheEnCours.depart = JSON.stringify(ficheEnCours.v);
+  }
+  const F = ficheEnCours, v = F.v, nouveau = index < 0, dis = F.ouvert ? "" : " disabled";
+  const statuts = estCI(nomClasse) ? ["Nouveau", "Redoublant"] : ["Passant", "Redoublant"];
+  const choix = (cle, options) => '<div class="choix">' + options.map(o => '<button data-ch="' + cle + '" data-v="' + esc(o) + '" class="'
+                + (v[cle] === o ? "on" : "") + '"' + dis + ">" + esc(o) + "</button>").join("") + "</div>";
+  const champ = (cle, lib, mode, ph) => '<label class="t">' + lib + '</label><input type="text" data-f="' + cle + '" value="' + esc(v[cle])
+                + '" autocomplete="off"' + (mode ? ' inputmode="' + mode + '"' : "") + (ph ? ' placeholder="' + ph + '"' : "") + dis + ">";
+  let html = (message || "") + (peutTaper() ? "" : bandeauLicence())
+    + '<div class="etapes"><div class="on"></div><div class="' + (page === 2 ? "on" : "") + '"></div></div><div class="carte fiche">';
+  if (page === 1) {
+    html += "<h2>1 / 2 · L'élève</h2>" + champ("prenom", "Prénom(s)") + champ("nom", "Nom")
+      + '<label class="t">Sexe</label>' + choix("sexe", ["M", "F"])
+      + '<label class="t">Statut cette année</label>' + choix("statut", statuts)
+      + '<div class="deux"><div>' + champ("scolarite", "Scolarité (années)", "numeric") + "</div><div>" + champ("doublees", "Classes doublées", "numeric") + "</div></div>"
+      + '<label class="t">Inscription</label>' + choix("inscription", ["Payée", "Non payée"]);
+  } else {
+    html += "<h2>2 / 2 · La naissance</h2>" + '<p class="gris">Regardez l\'extrait de naissance. Laissez vide si vous ne l\'avez pas encore.</p>'
+      + '<div class="deux"><div>' + champ("date", "Date de naissance", "numeric", "JJ/MM/AAAA") + "</div><div>" + champ("lieu", "Lieu de naissance") + "</div></div>"
+      + '<div class="deux"><div>' + champ("reg_numero", "N° dans le registre") + "</div><div>" + champ("reg_annee", "Année du registre", "numeric") + "</div></div>"
+      + champ("reg_centre", "Centre d'état civil");
+  }
+  html += "</div>";
+  const barre = !F.ouvert ? '<button class="gros" id="b-modifier">Modifier</button>'
+    : (page === 1 ? '<button class="gros" id="b-suite">Suivant : la naissance ›</button>'
+                  : '<button class="gros contour" id="b-prec">‹ Page 1</button><button class="gros vert" id="b-enreg">' + (nouveau ? "Enregistrer et élève suivant" : "Enregistrer") + "</button>")
+      + '<button class="gros contour" id="b-annuler">Annuler</button>';
+  const titre = nouveau ? "Nouvel élève" : (v.prenom + " " + String(v.nom).toUpperCase());
+  ecran(titre, nomClasse + " · élève " + (nouveau ? els.length + 1 : index + 1), html, () => { ficheEnCours = null; ecranEleves(); }, barre);
+  avantDeQuitter = () => F.ouvert && JSON.stringify(F.v) !== F.depart;
+  const lire = () => document.querySelectorAll("[data-f]").forEach(c => v[c.dataset.f] = c.value);
+  document.querySelectorAll("[data-ch]").forEach(b => b.onclick = () => { if (!F.ouvert) return; lire(); v[b.dataset.ch] = b.dataset.v; ecranFicheEleve(nomClasse, index, page); });
+  document.querySelectorAll("[data-f]").forEach(c => c.oninput = () => v[c.dataset.f] = c.value);
+  const erreur = (t, cle) => {
+    $("barre-msg").innerHTML = '<div class="message erreur" style="margin:0 0 8px">' + esc(t) + "</div>";
+    const c = cle && document.querySelector('[data-f="' + cle + '"]'); if (c) { c.classList.add("faux"); c.focus(); c.scrollIntoView({block: "center"}); }
+    return false;
+  };
+  const verifierPage1 = () => {
+    lire(); v.prenom = majMots(v.prenom); v.nom = majMots(v.nom);
+    if (!v.prenom || !v.nom) return erreur("Le prénom et le nom de l'élève sont obligatoires.", !v.prenom ? "prenom" : "nom");
+    if (!nomValable(v.prenom)) return erreur("Le prénom ne doit contenir que des lettres.", "prenom");
+    if (!nomValable(v.nom)) return erreur("Le nom ne doit contenir que des lettres.", "nom");
+    if (!v.sexe) return erreur("Choisissez le sexe de l'élève : M ou F.");
+    if (!v.statut) return erreur("Choisissez le statut : « " + statuts[0] + " » ou « " + statuts[1] + " » cette année.");
+    if (!/^\d+$/.test(v.scolarite.trim()) || +v.scolarite === 0) return erreur("Scolarité : tapez le nombre d'années (ex : 4).", "scolarite");
+    if (!/^\d+$/.test(v.doublees.trim())) return erreur("Classes doublées : tapez un nombre entier (0 si aucune).", "doublees");
+    if (+v.doublees >= +v.scolarite) return erreur("Classes doublées : le nombre doit être plus petit que la scolarité.", "doublees");
+    if (!v.inscription) return erreur("Choisissez l'inscription : Payée ou Non payée.");
+    return true;
+  };
+  const verifierPage2 = () => {
+    lire(); v.lieu = majMots(v.lieu); v.date = v.date.trim(); v.reg_numero = v.reg_numero.trim().replace(/\s+/g, " ");
+    v.reg_annee = v.reg_annee.trim(); v.reg_centre = v.reg_centre.trim().replace(/\s+/g, " "); v.reg_centre = v.reg_centre.charAt(0).toUpperCase() + v.reg_centre.slice(1);
+    if (v.date && !v.lieu) return erreur("Vous avez tapé la date de naissance : tapez aussi le lieu de naissance.", "lieu");
+    if (v.lieu && !v.date) return erreur("Vous avez tapé le lieu de naissance : tapez aussi la date de naissance.", "date");
+    if (v.lieu && !nomValable(v.lieu)) return erreur("Le lieu de naissance ne doit contenir que des lettres.", "lieu");
+    if (!v.date) { if (v.reg_numero || v.reg_annee || v.reg_centre) return erreur("Tapez aussi la date de naissance (le n° dans le registre va avec la date et le lieu).", "date"); return true; }
+    const d = dateValable(v.date);
+    if (!d) return erreur("Date invalide. Format attendu : JJ/MM/AAAA (ex : 04/11/2017).", "date");
+    if (d.getFullYear() < 1990 || d > new Date()) return erreur("Année de naissance impossible pour un élève.", "date");
+    const age = +anneeScolaire().slice(0, 4) - d.getFullYear();
+    if (age < 3 || age > 25) return erreur("Âge impossible pour un élève de l'école (" + age + " ans à la rentrée). Vérifiez la date.", "date");
+    if (+v.scolarite > Math.max(1, age - 4)) return erreur("Scolarité impossible : " + v.scolarite + " années d'école pour un élève de " + age + " ans. Vérifiez la scolarité (page 1) ou la date.", "date");
+    if (nouveau) for (const [cle, t] of [["reg_numero", "le n° dans le registre des naissances"], ["reg_annee", "l'année du registre"], ["reg_centre", "le centre d'état civil"]])
+      if (!v[cle]) return erreur("Vous avez tapé la date de naissance : tapez aussi " + t + " (regardez l'extrait de naissance).", cle);
+    if (v.reg_numero.length > 20) return erreur("Le n° dans le registre est trop long (20 caractères au plus).", "reg_numero");
+    if (v.reg_annee && (!/^\d{4}$/.test(v.reg_annee) || +v.reg_annee < d.getFullYear() || +v.reg_annee > new Date().getFullYear()))
+      return erreur("Année du registre : 4 chiffres, entre " + d.getFullYear() + " et " + new Date().getFullYear() + ".", "reg_annee");
+    if (v.reg_centre.length > 60) return erreur("Le centre d'état civil est trop long (60 caractères au plus).", "reg_centre");
+    return true;
+  };
+  if ($("b-modifier")) $("b-modifier").onclick = () => { if (!peutTaper()) return alerte(texteLicence()); F.ouvert = true; F.depart = JSON.stringify(v); ecranFicheEleve(nomClasse, index, page); };
+  if ($("b-annuler")) $("b-annuler").onclick = () => { ficheEnCours = null; avantDeQuitter = null; nouveau ? ecranEleves() : ecranFicheEleve(nomClasse, index, 1); };
+  if ($("b-suite")) $("b-suite").onclick = () => { if (verifierPage1()) ecranFicheEleve(nomClasse, index, 2); };
+  if ($("b-prec")) $("b-prec").onclick = () => { lire(); ecranFicheEleve(nomClasse, index, 1); };
+  if ($("b-enreg")) $("b-enreg").onclick = async () => {
+    if (!verifierPage1()) return ecranFicheEleve(nomClasse, index, 1, '<div class="message erreur">Corrigez d\'abord la page 1.</div>');
+    if (!verifierPage2()) return;
+    const autre = els.find((e, k) => k !== index && simple(e.prenom) === simple(v.prenom) && simple(e.nom) === simple(v.nom) && (e.date || "") === v.date);
+    if (autre && !confirm(v.prenom + " " + v.nom.toUpperCase() + (v.date ? " né(e) le " + v.date : "") + " est déjà dans la liste.\n\nL'enregistrer quand même (un autre élève qui porte le même nom) ?")) return;
+    const sauvegarde = strJ(classe.eleves || []);
+    const el = nouveau ? {id: nouvelId()} : els[index];
+    for (const c of ["prenom", "nom", "sexe", "statut", "inscription", "date", "lieu", "reg_numero", "reg_annee", "reg_centre"]) {
+      if (v[c]) el[c] = v[c]; else delete el[c];
+    }
+    el.scolarite = new Num(String(+v.scolarite)); el.doublees = new Num(String(+v.doublees));
+    if (el.inscription === "Payée") {
+      if (!el.date_paiement) { const [deb, fin] = periodeInscriptions(), j = new Date(Math.min(Math.max(Date.now(), deb), fin));
+        el.date_paiement = String(j.getDate()).padStart(2, "0") + "/" + String(j.getMonth() + 1).padStart(2, "0") + "/" + j.getFullYear(); }
+    } else el.date_paiement = "";
+    if (nouveau) (classe.eleves = classe.eleves || []).push(el);
+    classe.eleves.sort((a, b) => (simple(a.nom) + " " + simple(a.prenom)).localeCompare(simple(b.nom) + " " + simple(b.prenom)));
+    attente(true, "Enregistrement…"); const ok = await garderClasse(); attente(false);
+    if (!ok) { classe.eleves = parseJ(sauvegarde); return; }
+    avantDeQuitter = null; ficheEnCours = null;
+    const qui = esc(el.prenom + " " + el.nom.toUpperCase());
+    if (nouveau) return ecranFicheEleve(nomClasse, -1, 1, '<div class="message ok">✓ ' + qui + " enregistré" + (el.sexe === "F" ? "e" : "")
+      + " (" + classe.eleves.length + " élève(s)). Voici la fiche de l'élève suivant.</div>");
+    ecranEleves('<div class="message ok">✓ Fiche de ' + qui + " enregistrée.</div>");
+  };
 }
 
 function ecranCompositions() {
