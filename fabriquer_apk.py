@@ -436,7 +436,7 @@ public class MainActivity extends Activity {
                 try (FileOutputStream o = new FileOutputStream(f)) {
                     doc.writeTo(o);
                     // après la fin du PDF : les fiches en texte, pour l'ordinateur du directeur (les lecteurs PDF l'ignorent)
-                    o.write(("\n%DSOB-FICHES " + donnees + "\n").getBytes(StandardCharsets.US_ASCII));
+                    o.write(("\\n%DSOB-FICHES " + donnees + "\\n").getBytes(StandardCharsets.US_ASCII));
                 }
                 doc.close();
                 retirer();
