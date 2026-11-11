@@ -1351,6 +1351,10 @@ function ecranRepartition(n, R, message) {
     }
   });
 }
+function texteEnvoyerFiches() {
+  const k = SEL.size;
+  return "📤 Envoyer " + (k > 1 ? "les " + k + " fiches cochées" : k === 1 ? "la fiche cochée" : "les fiches cochées") + " (PDF)";
+}
 function messageBarre(t) { $("barre-msg").innerHTML = '<div class="message erreur" style="margin:0 0 8px">' + esc(t) + "</div>"; }
 function formaterDate(v) {                    // 06102026 -> 06/10/2026 pendant la frappe
   const c = v.replace(/\D/g, "").slice(0, 8);
@@ -1388,14 +1392,22 @@ function ecranFiches(n, s, message) {
     }
     if (!lecons.length) html += '<div class="message info">Pas de fiche cette semaine.</div>';
     if (sans.length) html += '<div class="carte"><b>Sans fiche cette semaine</b>' + sans.map(([a, t]) => "<p class='gris' style='margin:4px 0'>" + esc(a) + " : " + esc(t || "—") + "</p>").join("") + "</div>";
-    const nbCoches = [...SEL].length;
+    const nbCoches = SEL.size;
     ecran("Mes fiches", n + " · semaine " + s, html, ecranClasse,
-      '<button class="gros vert" id="b-envoyer-fiches"' + (nbCoches ? "" : " disabled") + ">📤 Envoyer " + (nbCoches ? "les " + nbCoches + " fiche" + (nbCoches > 1 ? "s" : "") + " cochée" + (nbCoches > 1 ? "s" : "") : "les fiches cochées") + " (PDF)</button>");
+      '<button class="gros vert" id="b-envoyer-fiches"' + (nbCoches ? "" : " disabled") + ">" + texteEnvoyerFiches() + "</button>");
     brancherOnglets(c => ecranFiches(c));
     if ($("b-sp")) $("b-sp").onclick = () => ecranFiches(n, s - 1);
     if ($("b-ss")) $("b-ss").onclick = () => ecranFiches(n, s + 1);
     if ($("b-demain")) $("b-demain").onclick = () => { deDemain.forEach(l => SEL.add(n + "|" + s + "|" + l.act + "|" + l.i)); ecranFiches(n, s); };
-    document.querySelectorAll("[data-coche]").forEach(b => b.onclick = () => { const id = b.dataset.coche; SEL.has(id) ? SEL.delete(id) : SEL.add(id); ecranFiches(n, s); });
+    // cocher / décocher sur place : l'écran ne remonte pas en haut (étape 306)
+    document.querySelectorAll("[data-coche]").forEach(b => b.onclick = () => {
+      const id = b.dataset.coche, on = !SEL.has(id);
+      on ? SEL.add(id) : SEL.delete(id);
+      b.textContent = on ? "✓" : "";
+      b.style.background = on ? "var(--vert)" : "white";
+      b.style.borderColor = on ? "var(--vert)" : "#999";
+      const env = $("b-envoyer-fiches"); env.textContent = texteEnvoyerFiches(); env.disabled = !SEL.size;
+    });
     document.querySelectorAll("[data-ouvre]").forEach(b => b.onclick = () => { const [ss, act, i] = b.dataset.ouvre.split("|"); ecranFicheTel(n, +ss, act, +i); });
     $("b-envoyer-fiches").onclick = () => envoyerFiches(() => ecranFiches(n, s));
   });
@@ -1462,7 +1474,10 @@ function ecranFicheTel(n, s, act, i, message) {
         EP = {type: "fiche", id, v: v2, depart: JSON.stringify(v2)};
         ecranFicheTel(n, s, act, i);
       };
-      $("b-cocher").onclick = () => { SEL.has(id) ? SEL.delete(id) : SEL.add(id); ecranFicheTel(n, s, act, i); };
+      $("b-cocher").onclick = () => {                 // sur place : la fiche ne remonte pas en haut
+        const on = !SEL.has(id); on ? SEL.add(id) : SEL.delete(id);
+        const b = $("b-cocher"); b.textContent = on ? "✓ À envoyer" : "☑ À envoyer"; b.classList.toggle("vert", on);
+      };
       if ($("b-reprendre")) $("b-reprendre").onclick = () => {
         if (!confirm("Effacer vos changements et reprendre la fiche toute prête du logiciel ?")) return;
         delete p.fiches[cle]; garderMemoire(); ecranFicheTel(n, s, act, i, '<div class="message ok">✓ Fiche du logiciel reprise.</div>');
@@ -1478,6 +1493,8 @@ const STYLE_FICHES = `<style>
   html, body { margin: 0; background: white; }
   body { font-family: Arial, Roboto, sans-serif; color: #1d1d1d; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body.pdf { width: 794px; padding: 38px 42px 0; box-sizing: border-box; }
+  @media print { body.pdf { width: auto; padding: 0; } }
+  table.etapes tr, table.info tr { break-inside: avoid; } table.etapes tr:has(td.sea) { break-after: avoid; }
   .fiche { page-break-after: always; } .fiche:last-child { page-break-after: auto; }
   .haut { display: flex; align-items: center; gap: 10px; background: #F2F2F2; border-radius: 10px; padding: 3px 12px;
           font-size: 11.5px; line-height: 1.25; margin-bottom: 3px; }
@@ -1563,6 +1580,8 @@ function paginerPourPdf() {
     var debut = p * H + MARGE, fin = (p + 1) * H - MARGE;
     var pousser = el.classList.contains("fiche") ? (k > 0 && t > debut + 2) : (b > fin && t > debut + 2);
     if (!pousser) continue;
+    var pr = el.tagName === "TR" ? el.previousElementSibling : null;
+    if (pr && pr.querySelector("td.sea")) { el = pr; t = haut(el); }   // « Séance 2 » reste avec sa ligne
     var manque = (p + 1) * H + MARGE - t;
     if (el.tagName === "TR") {
       var tr = document.createElement("tr"); tr.className = "saut";

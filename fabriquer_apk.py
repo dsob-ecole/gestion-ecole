@@ -154,6 +154,56 @@ ecrire("app/src/main/res/xml/chemins.xml", """
 </paths>
 """)
 
+# Étape 306 : les « rappels » de l'impression Android ne sont accessibles que depuis le paquet android.print.
+ecrire("app/src/main/java/android/print/ImprimeurPdf.java", """
+package android.print;
+
+import android.os.CancellationSignal;
+import android.os.ParcelFileDescriptor;
+import java.io.File;
+
+// Enregistre une page web (WebView) en PDF, comme « Enregistrer en PDF » de Chrome : texte net, fichier léger.
+public class ImprimeurPdf {
+    public interface Fin {
+        void ok();
+        void echec(String message);
+    }
+
+    public static void ecrire(final PrintDocumentAdapter a, PrintAttributes attrs, final File fichier, final Fin fin) {
+        a.onLayout(null, attrs, null, new PrintDocumentAdapter.LayoutResultCallback() {
+            @Override
+            public void onLayoutFinished(PrintDocumentInfo info, boolean changed) {
+                try {
+                    final ParcelFileDescriptor pfd = ParcelFileDescriptor.open(fichier,
+                            ParcelFileDescriptor.MODE_CREATE | ParcelFileDescriptor.MODE_TRUNCATE | ParcelFileDescriptor.MODE_READ_WRITE);
+                    a.onWrite(new PageRange[]{PageRange.ALL_PAGES}, pfd, new CancellationSignal(),
+                            new PrintDocumentAdapter.WriteResultCallback() {
+                                @Override
+                                public void onWriteFinished(PageRange[] pages) {
+                                    try { pfd.close(); } catch (Exception e) { }
+                                    if (fichier.length() > 0) fin.ok(); else fin.echec("vide");
+                                }
+
+                                @Override
+                                public void onWriteFailed(CharSequence erreur) {
+                                    try { pfd.close(); } catch (Exception e) { }
+                                    fin.echec(String.valueOf(erreur));
+                                }
+                            });
+                } catch (Exception e) {
+                    fin.echec(e.getMessage());
+                }
+            }
+
+            @Override
+            public void onLayoutFailed(CharSequence erreur) {
+                fin.echec(String.valueOf(erreur));
+            }
+        }, null);
+    }
+}
+""")
+
 ecrire("app/src/main/java/sn/dsob/gestionecole/MainActivity.java", """
 package sn.dsob.gestionecole;
 
@@ -396,7 +446,7 @@ public class MainActivity extends Activity {
                     public void onPageFinished(WebView v, String url) {
                         if (fini) return;
                         fini = true;
-                        w.postDelayed(() -> paginer(), 500);
+                        w.postDelayed(() -> imprimer(), 500);
                     }
                 });
                 Toast.makeText(MainActivity.this, "Préparation du PDF…", Toast.LENGTH_SHORT).show();
@@ -404,6 +454,52 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 echec(e);
             }
+        }
+
+        File fichier() {
+            File dossier = new File(getCacheDir(), "envois");
+            dossier.mkdirs();
+            return new File(dossier, nom.replaceAll("[^A-Za-z0-9._-]", "_"));
+        }
+
+        // Étape 306 : d'abord l'impression de Chrome « Enregistrer en PDF » (texte net, fichier léger) ;
+        // si le téléphone ne sait pas, l'ancienne façon (dessin des pages).
+        void imprimer() {
+            try {
+                final File f = fichier();
+                android.print.PrintDocumentAdapter a = w.createPrintDocumentAdapter("fiches");
+                android.print.PrintAttributes attrs = new android.print.PrintAttributes.Builder()
+                        .setMediaSize(android.print.PrintAttributes.MediaSize.ISO_A4)
+                        .setResolution(new android.print.PrintAttributes.Resolution("pdf", "pdf", 300, 300))
+                        .setMinMargins(android.print.PrintAttributes.Margins.NO_MARGINS)
+                        .build();
+                android.print.ImprimeurPdf.ecrire(a, attrs, f, new android.print.ImprimeurPdf.Fin() {
+                    @Override
+                    public void ok() {
+                        try { terminer(f); } catch (Exception e) { paginer(); }
+                    }
+
+                    @Override
+                    public void echec(String message) { paginer(); }
+                });
+            } catch (Throwable e) {
+                paginer();
+            }
+        }
+
+        void terminer(File f) throws Exception {
+            try (FileOutputStream o = new FileOutputStream(f, true)) {
+                // après la fin du PDF : les fiches en texte, pour l'ordinateur du directeur (les lecteurs PDF l'ignorent)
+                o.write(("\\n%DSOB-FICHES " + donnees + "\\n").getBytes(StandardCharsets.US_ASCII));
+            }
+            retirer();
+            Uri u = FileProvider.getUriForFile(MainActivity.this, "%(paquet)s.fichiers", f);
+            Intent i = new Intent(Intent.ACTION_SEND);
+            i.setType("application/pdf");
+            i.putExtra(Intent.EXTRA_STREAM, u);
+            i.putExtra(Intent.EXTRA_TEXT, "Mes fiches de préparation");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(i, "Envoyer les fiches au directeur"));
         }
 
         void paginer() {
@@ -430,23 +526,12 @@ public class MainActivity extends Activity {
                     w.draw(c);
                     doc.finishPage(page);
                 }
-                File dossier = new File(getCacheDir(), "envois");
-                dossier.mkdirs();
-                File f = new File(dossier, nom.replaceAll("[^A-Za-z0-9._-]", "_"));
+                File f = fichier();
                 try (FileOutputStream o = new FileOutputStream(f)) {
                     doc.writeTo(o);
-                    // après la fin du PDF : les fiches en texte, pour l'ordinateur du directeur (les lecteurs PDF l'ignorent)
-                    o.write(("\\n%DSOB-FICHES " + donnees + "\\n").getBytes(StandardCharsets.US_ASCII));
                 }
                 doc.close();
-                retirer();
-                Uri u = FileProvider.getUriForFile(MainActivity.this, "%(paquet)s.fichiers", f);
-                Intent i = new Intent(Intent.ACTION_SEND);
-                i.setType("application/pdf");
-                i.putExtra(Intent.EXTRA_STREAM, u);
-                i.putExtra(Intent.EXTRA_TEXT, "Mes fiches de préparation");
-                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                startActivity(Intent.createChooser(i, "Envoyer les fiches au directeur"));
+                terminer(f);
             } catch (Exception e) {
                 try { doc.close(); } catch (Exception x) { }
                 echec(e);
