@@ -658,6 +658,8 @@ function ecranClasse(message) {
     + '<button class="ligne-menu" id="b-compos"><span class="ic">📝</span><span>Taper les notes<span class="ex">'
     + (estProf() ? "Vos matières, semestre par semestre" : "Les compositions de la classe, activité par activité") + '</span></span></button>'
     + '<button class="ligne-menu" id="b-eleves"><span class="ic">👧🏾</span><span>Mes élèves<span class="ex">' + (estProf() ? "La liste de la classe" : "La liste de la classe · ajouter ou corriger un élève") + '</span></span></button>'
+    + (estProf() ? "" : '<button class="ligne-menu" id="b-repartition"><span class="ic">📅</span><span>Ma répartition<span class="ex">Les leçons de chaque semaine, d\'après le guide</span></span></button>'
+       + '<button class="ligne-menu" id="b-fiches"><span class="ic">📘</span><span>Mes fiches<span class="ex">Les fiches de la semaine · les envoyer au directeur</span></span></button>')
     + '<div class="carte"><h2>🔄 Échange avec ' + (estProf() ? "l'établissement" : "le directeur") + '</h2>'
     + '<p class="gris">Classe reçue le ' + (cm.exportee_le ? new Date(+cm.exportee_le * 1000).toLocaleString("fr-FR") : "?") + ".</p>"
     + '<p class="etat ' + (sy.dernier_envoi ? "ok" : "non") + '">' + esc(envoi) + "</p>"
@@ -668,6 +670,8 @@ function ecranClasse(message) {
     + '<button class="gros contour" id="b-fermer">🔒 Verrouiller ma classe</button>'
     + '<p class="gris">Verrouiller : le code sera demandé à la prochaine ouverture (avant de prêter votre téléphone, par exemple).</p>');
   $("b-compos").onclick = () => estProf() ? ecranProfClasses() : ecranCompositions(); $("b-eleves").onclick = ecranEleves;
+  if ($("b-repartition")) $("b-repartition").onclick = () => ecranRepartition();
+  if ($("b-fiches")) $("b-fiches").onclick = () => ecranFiches();
   $("b-envoyer").onclick = envoyerNotes; $("b-maj").onclick = () => ecranImporter(ecranClasse);
   $("b-licence").onclick = () => ecranLicence(ecranClasse);
   $("b-fermer").onclick = () => { if (!peutQuitter()) return; S = null; delete M.code_garde; garderMemoire();
@@ -1043,6 +1047,7 @@ async function envoyerNotes() {
   const envoi = copieJ(d);
   envoi.synchro = envoi.synchro || {};
   delete envoi.synchro.envoye_tel;
+  delete envoi.contenu_tel;            // étape 305 : la clé des fiches et le calendrier restent dans le téléphone
   envoi.synchro.envoi_maitre = {code: S.code.slice(0, 3), classes: nomsClasses(), prof: copieMaitre(d).prof || null, envoye_le: new Num(maintenant), par: "TEL-" + codeTelephone()};
   attente(true, "Préparation du fichier…");
   let texte;
@@ -1072,6 +1077,553 @@ function ecranLicence(retour, message) {
     + (M.classe ? '<button class="gros contour" id="b-maj">📥 Importer une mise à jour de ma classe</button>' : ""),
     retour);
   if ($("b-maj")) $("b-maj").onclick = () => S ? ecranImporter(() => ecranLicence(retour)) : ecranCode();
+}
+
+/* ---------- 12. Étape 305 : MA RÉPARTITION et MES FICHES (le maître les fait sur son téléphone) ----------
+   Le contenu (guide, répartitions, fiches toutes prêtes du CE1 au CM2) est rangé dans l'application, chiffré :
+   la clé arrive dans le fichier de la classe. Ce que le maître change reste dans le téléphone (M.pedago).
+   Le soir, il coche des fiches et les envoie au directeur en PDF (WhatsApp). */
+const NIVEAUX_FICHES = ["CE1", "CE2", "CM1", "CM2"];
+const JOURS_SEM = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"];
+const ORDINAUX = ["Première", "Deuxième", "Troisième", "Quatrième", "Cinquième", "Sixième", "Septième", "Huitième", "Neuvième", "Dixième"];
+const CONTENUS = {};
+const SEL = new Set();                 // fiches cochées : "classe|semaine|activité|i"
+let EP = null;                         // écran pédagogique en cours de modification
+const niveauDe = n => String(n || "").split(" ")[0];
+const pad2 = x => String(x).padStart(2, "0");
+const cleR = s => "R" + pad2(Math.ceil(s / 4));
+const clone = v => JSON.parse(JSON.stringify(v));
+const classesFiches = () => nomsClasses().filter(n => NIVEAUX_FICHES.includes(niveauDe(n)));
+const infoTel = () => (S && S.donnees && S.donnees.contenu_tel) || null;
+
+async function contenuNiveau(niv) {
+  if (CONTENUS[niv]) return CONTENUS[niv];
+  const info = infoTel();
+  if (!info || !info.cle) throw new Error("cle");
+  const rep = await fetch("contenu_" + niv + ".bin");
+  if (!rep.ok) throw new Error("fichier");
+  const o = new Uint8Array(await rep.arrayBuffer());
+  const cle = await crypto.subtle.importKey("raw", b64enOctets(String(info.cle)), "AES-GCM", false, ["decrypt"]);
+  const brut = await crypto.subtle.decrypt({name: "AES-GCM", iv: o.slice(5, 17)}, cle, o.slice(17));
+  const C = JSON.parse(dec.decode(brut));
+  C.pasFiche = new Set(C.pas_de_fiche);
+  C.parLecon = {};
+  for (const [k, f] of Object.entries(C.fiches)) { const c = k.split("|")[1] + "|" + f.lecon; if (!C.parLecon[c]) C.parLecon[c] = k; }
+  return (CONTENUS[niv] = C);
+}
+// Charge le contenu, ou explique pourquoi c'est impossible ; puis appelle suite(C)
+async function avecContenu(n, retour, suite) {
+  if (!NIVEAUX_FICHES.includes(niveauDe(n)))
+    return ecran("Pédagogie", n, '<div class="message info">Les répartitions et les fiches toutes prêtes existent du CE1 au CM2. '
+      + "Elles n'existent pas encore pour le " + esc(niveauDe(n)) + ".</div>", retour);
+  if (!infoTel())
+    return ecran("Pédagogie", n, '<div class="message info"><b>Il manque une mise à jour de votre classe.</b><br>'
+      + "Demandez au directeur de vous renvoyer le fichier de votre classe (depuis la nouvelle version du logiciel de l'ordinateur), "
+      + "puis touchez « Importer une mise à jour de ma classe ».</div>"
+      + '<button class="gros contour" id="b-maj2">📥 Importer une mise à jour de ma classe</button>', retour);
+  attente(true, "Ouverture des fiches…");
+  let C = null;
+  try { C = await contenuNiveau(niveauDe(n)); } catch (e) { C = null; }
+  attente(false);
+  if (!C) return ecran("Pédagogie", n, '<div class="message erreur">Les fiches n\'ont pas pu être ouvertes. '
+    + "Mettez l'application à jour, ou demandez au directeur de vous renvoyer votre classe.</div>", retour);
+  return suite(C);
+}
+
+/* --- ce que le maître a changé, gardé dans le téléphone (par année, école et classe) --- */
+function pedago(n) {
+  M.pedago = M.pedago || {};
+  const k = anneeScolaire() + "|" + (S.donnees.nom_ecole || "") + "|" + n;
+  const p = (M.pedago[k] = M.pedago[k] || {});
+  p.reps = p.reps || {}; p.fiches = p.fiches || {}; p.envois = p.envois || {};
+  return p;
+}
+// La répartition R : celle du téléphone, sinon celle faite sur l'ordinateur, sinon null (= le guide)
+function repartitionTel(n, R) {
+  const p = pedago(n);
+  if (p.reps[R]) return p.reps[R];
+  const o = ((S.donnees.classes[n] || {}).repartitions || {})[R];
+  if (o && (Object.keys(o.contenus || {}).length || (o.semaines || []).some(x => x && x[0])))
+    return {semaines: clone(o.semaines || []), contenus: clone(o.contenus || {}), ordinateur: true};
+  return null;
+}
+function texteGuide(C, act, s) { return ((C.guide[act] || [])[s - 1]) || ""; }
+function texteCase(n, C, act, s) {          // ce qui est écrit dans la case (répartition, sinon guide)
+  const rep = repartitionTel(n, cleR(s)), k = (s - 1) % 4;
+  const t = rep && rep.contenus && rep.contenus[act] ? String(rep.contenus[act][k] || "").trim() : "";
+  return t || texteGuide(C, act, s);
+}
+function leconsTextes(n, C, s, act) {        // comme fiche_lecons_semaine de l'ordinateur
+  const rep = repartitionTel(n, cleR(s)), k = (s - 1) % 4;
+  const t = rep && rep.contenus && rep.contenus[act] ? String(rep.contenus[act][k] || "").trim() : "";
+  let morceaux;
+  if (t && t !== texteGuide(C, act, s)) morceaux = t.split(/\n| ; | · /).map(m => m.replace(/^S\d+\s*/, "").trim());
+  else { const g = (C.guide_brut[act] || [])[s - 1]; morceaux = Array.isArray(g) ? g.slice() : [g || ""]; }
+  return morceaux.filter(m => m && String(m).trim());
+}
+function pasUneLecon(texte) {
+  const t = String(texte || "").trim().toLowerCase();
+  return !t || /^(intégration|évaluation|révision|semaine d'intégration|préparation|remédiation|composition)/.test(t)
+    || t.includes("intégration interdisciplinaire");
+}
+function joursActivite(n, C, act) {
+  const j = ((infoTel() || {}).jours || {})[n];
+  return (j && j[act]) || C.jours[act] || [];
+}
+function fichesSemaine(n, C, s) {
+  const presentes = new Set(C.domaines.flatMap(d => d[1])), lecons = [], sans = [];
+  for (const act of C.activites_fiches) {
+    if (!presentes.has(act)) continue;
+    const textes = leconsTextes(n, C, s, act), vraies = textes.filter(t => !pasUneLecon(t));
+    if ((textes.length && !vraies.length) || (vraies.length && C.pasFiche.has(s + "|" + act))) { sans.push([act, textes[0] || ""]); continue; }
+    const jours = joursActivite(n, C, act);
+    vraies.forEach((t, i) => lecons.push({act, i, lecon: t, jour: jours.length ? jours[Math.min(i, jours.length - 1)] : ""}));
+  }
+  const rang = j => { const k = JOURS_SEM.indexOf(j); return k < 0 ? 9 : k; };
+  lecons.sort((a, b) => rang(a.jour) - rang(b.jour) || C.activites_fiches.indexOf(a.act) - C.activites_fiches.indexOf(b.act) || a.i - b.i);
+  return {lecons, sans};
+}
+
+/* --- les dates : les semaines de la répartition, sinon le calendrier de l'école --- */
+const enDate = t => dateValable(String(t || "").trim());
+const texteDate = d => pad2(d.getDate()) + "/" + pad2(d.getMonth() + 1) + "/" + d.getFullYear();
+const lundiDe = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
+function semainesCalendrier(n) {
+  let l = ((infoTel() || {}).semaines_cours || []).map(x => [String(x[0]), String(x[1])]);
+  if (!l.length) {                            // pas de calendrier : lundi-vendredi depuis le 1er lundi d'octobre
+    const y = +anneeScolaire().slice(0, 4); let d = lundiDe(new Date(y, 9, 7));
+    for (let k = 0; k < 40; k++) { const v = new Date(d); v.setDate(v.getDate() + 4); l.push([texteDate(d), texteDate(v)]); d.setDate(d.getDate() + 7); }
+  }
+  const debut = enDate((S.donnees.classes[n] || {}).debut_cours);
+  if (debut) { const k = l.findIndex(x => { const a = enDate(x[1]); return a && a >= debut; }); if (k > 0) l = l.slice(k); }
+  return l;
+}
+function datesSemaine(n, s) {                // [du, au] de la semaine s (textes), ou ["", ""]
+  const propre = s2 => { const rep = repartitionTel(n, cleR(s2)), w = rep && rep.semaines && rep.semaines[(s2 - 1) % 4];
+                         return w && w[0] ? [String(w[0]), String(w[1] || "")] : null; };
+  const ici = propre(s); if (ici) return ici;
+  const cal = semainesCalendrier(n);
+  for (let s2 = s - 1; s2 >= 1; s2--) {       // la dernière semaine connue avant, puis les semaines de cours qui suivent
+    const w = propre(s2); if (!w) continue;
+    const k = cal.findIndex(x => x[0] === w[0] || (enDate(x[0]) && enDate(w[0]) && lundiDe(enDate(x[0])).getTime() === lundiDe(enDate(w[0])).getTime()));
+    if (k >= 0 && cal[k + s - s2]) return cal[k + s - s2];
+    break;
+  }
+  return cal[s - 1] || ["", ""];
+}
+function dateDuJour(n, s, jour) {
+  const du = enDate(datesSemaine(n, s)[0]); if (!du) return null;
+  const d = lundiDe(du), k = JOURS_SEM.indexOf(jour);
+  if (k >= 0) d.setDate(d.getDate() + k); else return du;
+  return d;
+}
+function nbSemaines(C) { return C.nb_rep * 4; }
+function semaineDuJour(n, C) {
+  const auj = new Date(); auj.setHours(0, 0, 0, 0);
+  if (auj.getDay() === 0 || auj.getDay() === 6) auj.setDate(auj.getDate() + (auj.getDay() === 6 ? 2 : 1));
+  let choix = 1;
+  for (let s = 1; s <= nbSemaines(C); s++) { const d = enDate(datesSemaine(n, s)[0]); if (d && lundiDe(d) <= auj) choix = s; }
+  return choix;
+}
+function demain() {                           // le prochain jour de classe (le vendredi : lundi)
+  const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + 1);
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+  return d;
+}
+const nomJour = d => JOURS_SEM[(d.getDay() + 6) % 7] || "";
+
+/* --- une fiche : celle modifiée par le maître, sinon la fiche toute prête, sinon une fiche à compléter --- */
+function ficheVide(n, C, l) {
+  return {champs: {cours: n, fiche: "", activite: l.act, date: "", duree: "", cb: "", palier: "", oa: "", contenu: l.lecon, os: "",
+                   moyens_ped: "", moyens_mat: "", doc: "Guide pédagogique " + C.etape + " (CEB), cahier de l'élève"},
+          etapes: [["Séance 1 — Révision", "", ""], ["Phase d'appropriation", "", ""], ["Phase d'évaluation", "", ""]]};
+}
+function ficheDe(n, C, s, l) {
+  const cle = s + "|" + l.act + "|" + l.i, m = pedago(n).fiches[cle];
+  let f, etat;
+  if (m && m.lecon === l.lecon) { f = clone(m); etat = "Modifiée"; }
+  else {
+    let g = C.fiches[cle];
+    if (!g || g.lecon !== l.lecon) g = C.fiches[C.parLecon[l.act + "|" + l.lecon]] || null;
+    if (g) { f = clone(g); etat = g.incomplete ? "À compléter" : "Prête"; }
+    else { f = ficheVide(n, C, l); etat = "À compléter"; }
+  }
+  const d = dateDuJour(n, s, l.jour);
+  f.champs.cours = n; f.champs.date = d ? texteDate(d) : "……/……/………"; f.champs.contenu = f.champs.contenu || l.lecon;
+  return {f, etat, cle, d};
+}
+const couleurEtat = e => e === "Prête" ? "var(--vert)" : e === "Modifiée" ? "#1A3E8C" : "#B26A00";
+
+/* --- les onglets des classes (classe multigrade : CE1 + CE2) --- */
+function ongletsClasses(n, aller) {
+  const l = classesFiches(); if (l.length < 2) return "";
+  return '<div class="choix" style="margin-bottom:10px">' + l.map(c => '<button data-cl="' + esc(c) + '" class="' + (c === n ? "on" : "") + '">' + esc(c) + "</button>").join("") + "</div>";
+}
+function brancherOnglets(aller) { document.querySelectorAll("[data-cl]").forEach(b => b.onclick = () => { if (peutQuitter()) aller(b.dataset.cl); }); }
+function premiereClasseFiches() { return classesFiches()[0] || nomsClasses()[0]; }
+
+/* ===================== 📅 MA RÉPARTITION ===================== */
+function ecranRepartition(n, R, message) {
+  n = n || premiereClasseFiches();
+  avecContenu(n, ecranClasse, C => {
+    const nb = C.nb_rep; R = R || cleR(semaineDuJour(n, C));
+    const num = +R.slice(1), p = pedago(n), rep = repartitionTel(n, R);
+    const ouvert = EP && EP.type === "rep" && EP.n === n && EP.R === R;
+    let html = (message || "") + ongletsClasses(n);
+    html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">';
+    for (let r = 1; r <= nb; r++) {
+      const c = "R" + pad2(r), faite = !!(p.reps[c] || (repartitionTel(n, c) || {}).ordinateur);
+      html += '<button data-r="' + c + '" style="flex:1 0 54px;font-size:16px;font-weight:bold;padding:9px 4px;border-radius:9px;border:2px solid '
+        + (c === R ? "var(--rouge);background:var(--rouge);color:white" : "#CCC;background:white;color:" + (faite ? "var(--vert)" : "#555")) + '">'
+        + (r === 1 ? "1re" : r + "e") + (faite ? " ✓" : "") + "</button>";
+    }
+    html += "</div>";
+    const s0 = (num - 1) * 4 + 1;
+    html += '<div class="carte"><h2>' + ORDINAUX[num - 1] + " répartition</h2><p class='gris'>Semaines " + s0 + " à " + (s0 + 3) + " du guide · "
+      + (p.reps[R] ? "<b style='color:#1A3E8C'>modifiée sur ce téléphone</b>" : rep && rep.ordinateur ? "faite sur l'ordinateur" : "celle du guide pédagogique") + "</p>";
+    for (let k = 0; k < 4; k++) {
+      const [du, au] = datesSemaine(n, s0 + k);
+      html += ouvert
+        ? '<div class="deux" style="align-items:center;margin-top:6px"><div style="flex:0 0 74px;font-weight:bold">Sem. ' + (k + 1) + '</div><div><input type="text" inputmode="numeric" data-du="' + k + '" value="' + esc(EP.v.semaines[k][0]) + '" placeholder="du"></div><div><input type="text" inputmode="numeric" data-au="' + k + '" value="' + esc(EP.v.semaines[k][1]) + '" placeholder="au"></div></div>'
+        : "<p style='margin:3px 0'><b>Semaine " + (k + 1) + "</b> : " + (du ? "du " + esc(du) + (au ? " au " + esc(au) : "") : "<span class='gris'>dates pas encore fixées</span>") + "</p>";
+    }
+    if (ouvert) html += '<p class="gris">Dates : jour/mois/année (ex : 06/10/2026). Laissez vide pour suivre le calendrier de l\'école.</p>';
+    html += "</div>";
+    for (const [dom, acts] of C.domaines) {
+      if (!acts.length) continue;
+      html += '<h2 style="color:var(--rouge);margin:16px 0 8px">' + esc(dom) + "</h2>";
+      for (const act of acts) {
+        html += '<div class="carte" style="padding:12px 14px"><b>' + esc(act) + "</b>";
+        for (let k = 0; k < 4; k++) {
+          const s = s0 + k, t = ouvert ? EP.v.contenus[act][k] : texteCase(n, C, act, s);
+          html += ouvert
+            ? '<label class="gris" style="display:block;margin-top:8px">Semaine ' + (k + 1) + '</label><textarea rows="2" data-act="' + esc(act) + '" data-k="' + k + '" style="font-size:16px">' + esc(t) + "</textarea>"
+            : '<p style="margin:6px 0 0;font-size:16px"><span class="gris">S' + (k + 1) + " :</span> " + (t ? esc(t).replace(/\n/g, "<br>") : "<span class='gris'>—</span>") + "</p>";
+        }
+        html += "</div>";
+      }
+    }
+    if (!ouvert && p.reps[R]) html += '<button class="gros contour" id="b-guide">↺ Revenir à la répartition ' + (rep && rep.ordinateur ? "" : "du guide") + "</button>";
+    const barre = ouvert ? '<button class="gros vert" id="b-enreg">Enregistrer</button><button class="gros contour" id="b-annuler">Annuler</button>'
+                         : '<button class="gros" id="b-modifier">Modifier</button>';
+    ecran("Ma répartition", n + " · " + ORDINAUX[num - 1].toLowerCase() + " répartition", html, () => { EP = null; ecranClasse(); }, barre);
+    brancherOnglets(c => { EP = null; ecranRepartition(c); });
+    document.querySelectorAll("[data-r]").forEach(b => b.onclick = () => { if (peutQuitter()) { EP = null; ecranRepartition(n, b.dataset.r); } });
+    const lire = () => {
+      document.querySelectorAll("[data-du]").forEach(i => EP.v.semaines[+i.dataset.du][0] = i.value.trim());
+      document.querySelectorAll("[data-au]").forEach(i => EP.v.semaines[+i.dataset.au][1] = i.value.trim());
+      document.querySelectorAll("textarea[data-act]").forEach(t => EP.v.contenus[t.dataset.act][+t.dataset.k] = t.value.trim());
+    };
+    if (ouvert) {
+      document.querySelectorAll("[data-du],[data-au]").forEach(i => i.oninput = () => { i.value = formaterDate(i.value); });
+      avantDeQuitter = () => { lire(); return JSON.stringify(EP.v) !== EP.depart; };
+      $("b-annuler").onclick = () => { EP = null; avantDeQuitter = null; ecranRepartition(n, R); };
+      $("b-enreg").onclick = () => {
+        lire();
+        for (let k = 0; k < 4; k++) {
+          const [du, au] = EP.v.semaines[k];
+          for (const t of [du, au]) if (t && !enDate(t)) return messageBarre("Semaine " + (k + 1) + " : la date « " + t + " » n'est pas valable (jour/mois/année).");
+          if (du && au && !(enDate(au) >= enDate(du) && (enDate(au) - enDate(du)) / 86400000 <= 6))
+            return messageBarre("Semaine " + (k + 1) + " : « du » doit être avant « au », et une semaine dure 7 jours au plus.");
+        }
+        const contenus = {};
+        for (const act of Object.keys(EP.v.contenus)) {
+          const l = EP.v.contenus[act].map((t, k) => t === texteGuide(C, act, s0 + k) ? "" : t);   // inchangé = le guide
+          if (l.some(x => x)) contenus[act] = l;
+        }
+        p.reps[R] = {semaines: EP.v.semaines, contenus, le: Date.now()};
+        if (!garderMemoire()) return;
+        EP = null; avantDeQuitter = null;
+        ecranRepartition(n, R, '<div class="message ok">✓ Répartition enregistrée. Vos fiches suivent cette répartition.</div>');
+      };
+    } else {
+      $("b-modifier").onclick = () => {
+        if (!peutTaper()) return alerte(texteLicence());
+        const v = {semaines: [0, 1, 2, 3].map(k => { const w = rep && rep.semaines && rep.semaines[k]; return w && w[0] ? [String(w[0]), String(w[1] || "")] : ["", ""]; }), contenus: {}};
+        for (const [, acts] of C.domaines) for (const act of acts) v.contenus[act] = [0, 1, 2, 3].map(k => texteCase(n, C, act, s0 + k));
+        EP = {type: "rep", n, R, v, depart: JSON.stringify(v)};
+        ecranRepartition(n, R);
+      };
+      if ($("b-guide")) $("b-guide").onclick = () => {
+        if (!confirm("Effacer les changements faits sur ce téléphone pour cette répartition ?")) return;
+        delete p.reps[R]; garderMemoire(); ecranRepartition(n, R, '<div class="message ok">✓ Changements effacés.</div>');
+      };
+    }
+  });
+}
+function messageBarre(t) { $("barre-msg").innerHTML = '<div class="message erreur" style="margin:0 0 8px">' + esc(t) + "</div>"; }
+function formaterDate(v) {                    // 06102026 -> 06/10/2026 pendant la frappe
+  const c = v.replace(/\D/g, "").slice(0, 8);
+  return c.length > 4 ? c.slice(0, 2) + "/" + c.slice(2, 4) + "/" + c.slice(4) : c.length > 2 ? c.slice(0, 2) + "/" + c.slice(2) : c;
+}
+
+/* ===================== 📘 MES FICHES (maquette 2 : toute la semaine sur une liste) ===================== */
+function ecranFiches(n, s, message) {
+  n = n || premiereClasseFiches();
+  avecContenu(n, ecranClasse, C => {
+    const nb = nbSemaines(C);
+    s = Math.min(Math.max(s || semaineDuJour(n, C), 1), nb);
+    const {lecons, sans} = fichesSemaine(n, C, s), p = pedago(n);
+    const [du, au] = datesSemaine(n, s), dem = demain(), nomDem = nomJour(dem);
+    const deDemain = lecons.filter(l => { const d = dateDuJour(n, s, l.jour); return d && d.getTime() === dem.getTime(); });
+    let html = (message || "") + ongletsClasses(n);
+    html += '<div class="deux" style="margin-bottom:8px"><div><button class="gros contour" id="b-sp" style="margin:0;font-size:15px;padding:10px"' + (s <= 1 ? " disabled" : "")
+      + '>‹ Semaine ' + (s - 1) + '</button></div><div><button class="gros contour" id="b-ss" style="margin:0;font-size:15px;padding:10px"' + (s >= nb ? " disabled" : "")
+      + ">Semaine " + (s + 1) + " ›</button></div></div>";
+    html += '<p class="gris" style="text-align:center;margin:0 0 6px">' + (du ? "Du " + esc(du) + (au ? " au " + esc(au) : "") : "Dates pas encore fixées (voir « Ma répartition »)") + "</p>";
+    if (deDemain.length) html += '<button class="gros contour" id="b-demain" style="font-size:16px;padding:11px">☑ Cocher les fiches de demain (' + nomDem.toLowerCase() + " " + pad2(dem.getDate()) + "/" + pad2(dem.getMonth() + 1) + ")</button>";
+    let jourCourant = null;
+    for (const l of lecons) {
+      if (l.jour !== jourCourant) {
+        jourCourant = l.jour; const d = dateDuJour(n, s, l.jour);
+        html += '<h2 style="color:var(--rouge);margin:16px 0 8px">' + esc(l.jour || "Jour à fixer") + (d ? " " + pad2(d.getDate()) + "/" + pad2(d.getMonth() + 1) : "") + "</h2>";
+      }
+      const {etat, cle} = ficheDe(n, C, s, l), id = n + "|" + cle, on = SEL.has(id);
+      html += '<div class="carte" style="display:flex;gap:12px;align-items:center;padding:12px;margin-bottom:8px">'
+        + '<button data-coche="' + esc(id) + '" aria-label="Cocher" style="flex:none;width:34px;height:34px;border-radius:8px;font-size:20px;font-weight:bold;border:2px solid '
+        + (on ? "var(--vert);background:var(--vert);color:white" : "#999;background:white;color:white") + '">' + (on ? "✓" : "") + "</button>"
+        + '<button data-ouvre="' + esc(cle) + '" style="flex:1;text-align:left;background:none;border:0;padding:0;color:var(--texte)"><b style="font-size:16px">' + esc(l.act) + "</b><br><span style='font-size:15px'>" + esc(l.lecon)
+        + "</span><br><span style='font-size:13px;font-weight:bold;color:" + couleurEtat(etat) + "'>" + etat + "</span>"
+        + (p.envois[cle] ? "<span style='font-size:13px;color:var(--gris)'> · envoyée le " + new Date(p.envois[cle]).toLocaleDateString("fr-FR") + " ✓</span>" : "") + "</button></div>";
+    }
+    if (!lecons.length) html += '<div class="message info">Pas de fiche cette semaine.</div>';
+    if (sans.length) html += '<div class="carte"><b>Sans fiche cette semaine</b>' + sans.map(([a, t]) => "<p class='gris' style='margin:4px 0'>" + esc(a) + " : " + esc(t || "—") + "</p>").join("") + "</div>";
+    const nbCoches = [...SEL].length;
+    ecran("Mes fiches", n + " · semaine " + s, html, ecranClasse,
+      '<button class="gros vert" id="b-envoyer-fiches"' + (nbCoches ? "" : " disabled") + ">📤 Envoyer " + (nbCoches ? "les " + nbCoches + " fiche" + (nbCoches > 1 ? "s" : "") + " cochée" + (nbCoches > 1 ? "s" : "") : "les fiches cochées") + " (PDF)</button>");
+    brancherOnglets(c => ecranFiches(c));
+    if ($("b-sp")) $("b-sp").onclick = () => ecranFiches(n, s - 1);
+    if ($("b-ss")) $("b-ss").onclick = () => ecranFiches(n, s + 1);
+    if ($("b-demain")) $("b-demain").onclick = () => { deDemain.forEach(l => SEL.add(n + "|" + s + "|" + l.act + "|" + l.i)); ecranFiches(n, s); };
+    document.querySelectorAll("[data-coche]").forEach(b => b.onclick = () => { const id = b.dataset.coche; SEL.has(id) ? SEL.delete(id) : SEL.add(id); ecranFiches(n, s); });
+    document.querySelectorAll("[data-ouvre]").forEach(b => b.onclick = () => { const [ss, act, i] = b.dataset.ouvre.split("|"); ecranFicheTel(n, +ss, act, +i); });
+    $("b-envoyer-fiches").onclick = () => envoyerFiches(() => ecranFiches(n, s));
+  });
+}
+
+/* --- une fiche ouverte : lisible en grand ; « Modifier » pour la changer --- */
+const CHAMPS_FICHE = [["duree", "Durée"], ["cb", "CB"], ["palier", "Palier"], ["oa", "OA"], ["contenu", "Contenu"], ["os", "OS"],
+                      ["moyens_ped", "Moyens pédagogiques"], ["moyens_mat", "Moyens matériels"], ["doc", "Documentation"]];
+function ecranFicheTel(n, s, act, i, message) {
+  avecContenu(n, () => ecranFiches(n, s), C => {
+    const l = fichesSemaine(n, C, s).lecons.find(x => x.act === act && x.i === i);
+    if (!l) return ecranFiches(n, s, '<div class="message erreur">Cette fiche n\'existe plus (la répartition a changé).</div>');
+    const {f, etat, cle} = ficheDe(n, C, s, l), id = n + "|" + cle, p = pedago(n);
+    const ouvert = EP && EP.type === "fiche" && EP.id === id;
+    const v = ouvert ? EP.v : f;
+    const txt = t => esc(t || "").replace(/\n/g, "<br>");
+    let html = (message || "") + '<div class="carte"><h2>' + esc(act) + "</h2><p style='font-size:17px;font-weight:bold'>" + esc(l.lecon) + "</p>"
+      + "<p class='gris'>" + esc(l.jour || "") + " " + esc(f.champs.date) + (f.champs.fiche ? " · fiche n° " + esc(f.champs.fiche) : "")
+      + " · <b style='color:" + couleurEtat(etat) + "'>" + etat + "</b></p></div>";
+    html += '<div class="carte fiche">';
+    for (const [k, nom] of CHAMPS_FICHE) {
+      if (ouvert) html += '<label class="t">' + nom + '</label><textarea rows="' + (k === "os" || k === "palier" ? 3 : 2) + '" data-ch="' + k + '" style="font-size:16px">' + esc(v.champs[k] || "") + "</textarea>";
+      else if (v.champs[k]) html += "<p style='margin:8px 0'><b style='color:var(--rouge)'>" + nom + "</b><br>" + txt(v.champs[k]) + "</p>";
+    }
+    html += "</div><h2 style='margin:16px 0 8px'>Démarche</h2>";
+    (v.etapes || []).forEach((e, k) => {
+      if (ouvert) html += '<div class="carte"><label class="t">Étape</label><input type="text" data-e="' + k + '" data-c="0" value="' + esc(e[0]) + '">'
+        + '<label class="t">Activités du maître</label><textarea rows="5" data-e="' + k + '" data-c="1" style="font-size:16px">' + esc(e[1]) + "</textarea>"
+        + '<label class="t">Activités des élèves</label><textarea rows="2" data-e="' + k + '" data-c="2" style="font-size:16px">' + esc(e[2]) + "</textarea>"
+        + '<button class="gros contour" data-retire="' + k + '" style="font-size:15px;padding:9px">✕ Retirer cette étape</button></div>';
+      else html += '<div class="carte" style="padding:12px 14px"><b style="color:var(--rouge)">' + txt(e[0]) + "</b><p style='margin:6px 0'>" + txt(e[1])
+        + "</p>" + (e[2] ? "<p class='gris' style='margin:6px 0'><b>Élèves :</b> " + txt(e[2]) + "</p>" : "") + "</div>";
+    });
+    if (ouvert) html += '<button class="gros contour" id="b-ajout-etape">➕ Ajouter une étape</button>';
+    if (!ouvert && v.encadres && (v.encadres.criteres || []).length)
+      html += '<div class="carte"><b>Fiche de critères</b>' + v.encadres.criteres.map(c => "<p style='margin:4px 0'>☐ " + esc(c) + "</p>").join("") + "</div>";
+    if (!ouvert && etat === "Modifiée") html += '<button class="gros contour" id="b-reprendre">↺ Reprendre la fiche toute prête du logiciel</button>';
+    const on = SEL.has(id);
+    const barre = ouvert ? '<button class="gros vert" id="b-enreg">Enregistrer</button><button class="gros contour" id="b-annuler">Annuler</button>'
+      : '<button class="gros contour" id="b-modifier">Modifier</button><button class="gros' + (on ? " vert" : "") + '" id="b-cocher">' + (on ? "✓ À envoyer" : "☑ À envoyer") + "</button>";
+    ecran("Fiche", n + " · " + (l.jour || "") + " " + f.champs.date, html, () => { EP = null; ecranFiches(n, s); }, barre);
+    const lire = () => {
+      document.querySelectorAll("[data-ch]").forEach(t => EP.v.champs[t.dataset.ch] = t.value);
+      document.querySelectorAll("[data-e]").forEach(t => EP.v.etapes[+t.dataset.e][+t.dataset.c] = t.value);
+    };
+    if (ouvert) {
+      avantDeQuitter = () => { lire(); return JSON.stringify(EP.v) !== EP.depart; };
+      document.querySelectorAll("[data-retire]").forEach(b => b.onclick = () => { lire(); EP.v.etapes.splice(+b.dataset.retire, 1); ecranFicheTel(n, s, act, i); });
+      $("b-ajout-etape").onclick = () => { lire(); EP.v.etapes.push(["", "", ""]); ecranFicheTel(n, s, act, i); };
+      $("b-annuler").onclick = () => { EP = null; avantDeQuitter = null; ecranFicheTel(n, s, act, i); };
+      $("b-enreg").onclick = () => {
+        lire();
+        const m = clone(EP.v); m.lecon = l.lecon; m.modifiee = true; m.le = Date.now();
+        delete m.champs.date; delete m.champs.cours;
+        p.fiches[cle] = m;
+        if (!garderMemoire()) return;
+        EP = null; avantDeQuitter = null;
+        ecranFicheTel(n, s, act, i, '<div class="message ok">✓ Fiche enregistrée.</div>');
+      };
+    } else {
+      $("b-modifier").onclick = () => {
+        if (!peutTaper()) return alerte(texteLicence());
+        const v2 = clone(f); v2.etapes = (v2.etapes || []).map(e => [String(e[0] || ""), String(e[1] || ""), String(e[2] || "")]);
+        EP = {type: "fiche", id, v: v2, depart: JSON.stringify(v2)};
+        ecranFicheTel(n, s, act, i);
+      };
+      $("b-cocher").onclick = () => { SEL.has(id) ? SEL.delete(id) : SEL.add(id); ecranFicheTel(n, s, act, i); };
+      if ($("b-reprendre")) $("b-reprendre").onclick = () => {
+        if (!confirm("Effacer vos changements et reprendre la fiche toute prête du logiciel ?")) return;
+        delete p.fiches[cle]; garderMemoire(); ecranFicheTel(n, s, act, i, '<div class="message ok">✓ Fiche du logiciel reprise.</div>');
+      };
+    }
+  });
+}
+
+/* ===================== 📤 ENVOYER LES FICHES AU DIRECTEUR (PDF par WhatsApp) ===================== */
+const ICONE_ECOLE = '<svg class="ico" viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="#333" stroke-width="1.8"><path d="M3 10l9-6 9 6"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/></svg>';
+const STYLE_FICHES = `<style>
+  @page { size: A4; margin: 10mm 11mm; }
+  html, body { margin: 0; background: white; }
+  body { font-family: Arial, Roboto, sans-serif; color: #1d1d1d; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body.pdf { width: 794px; padding: 38px 42px 0; box-sizing: border-box; }
+  .fiche { page-break-after: always; } .fiche:last-child { page-break-after: auto; }
+  .haut { display: flex; align-items: center; gap: 10px; background: #F2F2F2; border-radius: 10px; padding: 3px 12px;
+          font-size: 11.5px; line-height: 1.25; margin-bottom: 3px; }
+  .haut .ico { flex-shrink: 0; width: 22px; height: 22px; } .haut .ec { font-size: 14.5px; font-weight: bold; }
+  .haut .gauche { flex: 1; } .haut .petit { font-size: 11px; color: #555; } .haut .droite { text-align: right; }
+  table { border-collapse: collapse; width: 100%; } td, th { border: 1px solid #CFCFCF; padding: 3px 6px;
+  vertical-align: top; font-size: 12px; line-height: 1.25; }
+  table.tete { border-collapse: separate; border-spacing: 0; border: 1.5px solid #CFCFCF; border-radius: 10px; margin-bottom: 3px; }
+  table.tete td { border: none; padding: 3px 10px; font-size: 12.5px; vertical-align: middle; }
+  .titre { text-align: center; font-weight: bold; font-size: 18px; letter-spacing: 1px; vertical-align: middle; }
+  td.titre::after { content: ""; display: block; width: 56px; height: 3px; background: #333; border-radius: 2px; margin: 2px auto 0; }
+  .info td.lab { width: 22%; font-weight: bold; background: #F2F2F2; } .info td.gras { font-weight: bold; }
+  .dem { text-align: center; font-weight: bold; padding: 2px 0 2px; font-size: 13.5px; }
+  .dem::after { content: ""; display: block; width: 44px; height: 2.5px; background: #333; border-radius: 2px; margin: 1px auto 0; }
+  .etapes th { font-size: 12px; background: #EBEBEB; } .etapes td.et { font-weight: bold; }
+  .etapes td.sea { text-align: center; font-weight: bold; font-size: 13px; background: #F2F2F2; }
+  table.s12 { width: 100%; margin: 0; } table.s12 td { width: 50%; border: 1px solid #CFCFCF; padding: 3px 4px; }
+  table.enc { margin-top: 8px; page-break-inside: avoid; } table.enc th { font-size: 12px; background: #EBEBEB; }
+  table.enc td.lab { width: 22%; font-weight: bold; } td.on { width: 9%; text-align: center; }
+  .grilles { display: flex; flex-wrap: wrap; justify-content: space-between; align-content: flex-start; }
+  .gr { width: 47%; border: 1px dashed #000; padding: 8px; margin-bottom: 14px; font-size: 12px; box-sizing: border-box; }
+  .gr table { margin-top: 5px; } .gr td { font-size: 11px; }
+  tr.saut td { border: none !important; padding: 0 !important; background: none !important; }
+</style>`;
+function bandeauFicheHtml(n) {
+  const d = S.donnees, ens = (d.classes[n] || {}).enseignant || {};
+  const autres = [d.ia ? "Inspection d'Académie : " + esc(d.ia) : "", d.ief ? "IEF : " + esc(d.ief) : ""].filter(x => x);
+  const maitre = ((ens.prenom || "") + " " + (ens.nom || "")).trim();
+  return '<div class="haut">' + ICONE_ECOLE + '<div class="gauche"><div class="ec">' + esc(d.nom_ecole || "") + '</div><div class="petit">' + autres.join(" · ")
+    + '</div></div><div class="droite">Année scolaire <b>' + esc(anneeScolaire()) + "</b> · Classe : <b>" + esc(n) + "</b><br>"
+    + (ens.sexe === "F" ? "Enseignante : " : "Enseignant : ") + "<b>" + esc(maitre || "……………") + "</b></div></div>";
+}
+function ficheA4Html(n, f) {                  // comme page_fiche_prep_html de l'ordinateur (fiche 1 : tout en tableau)
+  const c = f.champs, t = x => esc(x == null ? "" : String(x)).replace(/\n/g, "<br>");
+  const lignes = [["CB", c.cb], ["Palier", c.palier], ["OA", c.oa], ["Contenu", c.contenu], ["OS", c.os], ["Moyens pédagogiques", c.moyens_ped],
+                  ["Moyens matériels", c.moyens_mat], ["Documentation", c.doc]];
+  let s = "<div class='fiche'>" + bandeauFicheHtml(n) + "<table class='tete'><tr><td style='width:27%'>Cours : <b>" + t(c.cours) + "</b><br>Fiche n° : <b>" + t(c.fiche)
+    + "</b></td><td class='titre'>" + t(c.activite).toUpperCase() + "</td><td style='width:27%'>Date : <b>" + t(c.date) + "</b><br>Durée : <b>" + t(c.duree)
+    + "</b></td></tr></table><table class='info'>";
+  for (const [nom, v] of lignes) s += "<tr><td class='lab'>" + nom + "</td><td" + (nom === "Contenu" ? " class='gras'" : "") + ">" + t(v) + "</td></tr>";
+  s += "</table><div class='dem'>Démarche</div><table class='etapes'><tr><th style='width:20%'>ÉTAPES</th><th>ACTIVITÉS DU MAÎTRE</th><th style='width:27%'>ACTIVITÉS DES ÉLÈVES</th></tr>";
+  for (const [e, m0, el] of (f.etapes || [])) {
+    const m = String(m0 || "");
+    if (String(e).startsWith("Séance 2")) {
+      s += "<tr><td colspan='3' class='sea'>Séance 2</td></tr><tr><td class='et'>" + t(String(e).split("—").slice(1).join("—").trim() || e) + "</td><td>" + t(m) + "</td><td>" + t(el) + "</td></tr>";
+      continue;
+    }
+    let mh = t(m);
+    if (m.startsWith("S1 — ") && m.includes("\nS2 — ")) {
+      const [g, d] = [m.slice(0, m.indexOf("\nS2 — ")), m.slice(m.indexOf("\nS2 — ") + 6)];
+      mh = "<table class='s12'><tr><td><b>S1</b> — " + t(g.slice(5)) + "</td><td><b>S2</b> — " + t(d) + "</td></tr></table>";
+    }
+    s += "<tr><td class='et'>" + t(e) + "</td><td>" + mh + "</td><td>" + t(el) + "</td></tr>";
+  }
+  s += "</table>";
+  const enc = f.encadres;
+  if (enc) {
+    s += "<table class='enc'><tr><th colspan='3'>Fiche de critères (cochée par l'élève, puis par le maître)</th></tr><tr><td style='width:82%;font-weight:bold'>Critère</td><td class='on'>OUI</td><td class='on'>NON</td></tr>";
+    for (const cr of enc.criteres || []) s += "<tr><td>" + t(cr) + "</td><td></td><td></td></tr>";
+    s += "</table>";
+    if (enc.referentiel && enc.referentiel.length) {
+      s += "<table class='enc'><tr><th colspan='2'>Référentiel (banque de mots affichée)</th></tr>";
+      for (const [r, mots] of enc.referentiel) s += "<tr><td class='lab'>" + t(r) + "</td><td>" + t(mots) + "</td></tr>";
+      s += "</table>";
+    }
+    if (enc.attendu) s += "<table class='enc'><tr><th>Production attendue (exemple)</th></tr><tr><td>" + t(enc.attendu) + "</td></tr></table>";
+  }
+  s += "</div>";
+  if (enc && f.grille_eleve) {
+    const g = "<div class='gr'><b>Fiche de critères — " + t(enc.titre) + "</b><br>Nom : ……………………………<table>"
+      + (enc.criteres || []).map(cr => "<tr><td>" + t(cr) + "</td><td class='on'>OUI</td><td class='on'>NON</td></tr>").join("") + "</table></div>";
+    s += "<div class='fiche grilles'>" + g.repeat(4) + "</div>";
+  }
+  return s;
+}
+// Dans le PDF du téléphone, une page A4 = 794 × 1123 points d'écran : on pousse à la page suivante ce qui serait coupé.
+const SCRIPT_PAGES = "<scr" + `ipt>
+function paginerPourPdf() {
+  var H = 1123, MARGE = 38, haut = function (el) { return el.getBoundingClientRect().top + window.scrollY; };
+  var blocs = document.querySelectorAll(".fiche, .haut, table.tete, table.info tr, .dem, table.etapes tr, table.enc, .gr");
+  for (var k = 0; k < blocs.length; k++) {
+    var el = blocs[k], t = haut(el), b = t + el.getBoundingClientRect().height, p = Math.floor(t / H);
+    var debut = p * H + MARGE, fin = (p + 1) * H - MARGE;
+    var pousser = el.classList.contains("fiche") ? (k > 0 && t > debut + 2) : (b > fin && t > debut + 2);
+    if (!pousser) continue;
+    var manque = (p + 1) * H + MARGE - t;
+    if (el.tagName === "TR") {
+      var tr = document.createElement("tr"); tr.className = "saut";
+      tr.innerHTML = '<td colspan="3" style="height:' + manque + 'px"></td>'; el.parentNode.insertBefore(tr, el);
+    } else {
+      var sp = document.createElement("div"); sp.style.height = manque + "px"; el.parentNode.insertBefore(sp, el);
+    }
+  }
+  var pages = Math.max(1, Math.ceil((document.body.scrollHeight - 2) / H));
+  document.body.style.minHeight = (pages * H) + "px";
+  return pages;
+}
+<\/script>`;
+function pageFichesHtml(liste, donnees, pourPdf) {
+  return '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=794"><title>Fiches de préparation</title>' + STYLE_FICHES
+    + (pourPdf ? SCRIPT_PAGES : "") + "</head><body" + (pourPdf ? ' class="pdf"' : "") + ">" + liste.map(x => ficheA4Html(x.n, x.f)).join("")
+    + (donnees ? "<!" + "--\n%DSOB-FICHES " + donnees + "\n--" + ">" : "") + "</body></html>";
+}
+function octetsUtf8EnB64(texte) { return octetsEnB64(enc.encode(texte)); }
+async function envoyerFiches(retour) {
+  if (LIC.statut !== "valide")
+    return alerte("L'envoi des fiches en PDF est réservé aux écoles qui ont leur licence de l'année.\n\n" + texteLicence());
+  const ids = [...SEL]; if (!ids.length) return;
+  if (ids.length > 30) return alerte("Vous avez coché " + ids.length + " fiches. Envoyez-en 30 au plus à la fois (par exemple, celles de demain).");
+  attente(true, "Préparation du PDF…");
+  const liste = [];
+  try {
+    for (const id of ids) {
+      const [n, s, act, i] = id.split("|");
+      const C = await contenuNiveau(niveauDe(n));
+      const l = fichesSemaine(n, C, +s).lecons.find(x => x.act === act && x.i === +i);
+      if (!l) continue;
+      const r = ficheDe(n, C, +s, l);
+      liste.push({n, s: +s, l, f: r.f, etat: r.etat, cle: r.cle, d: r.d});
+    }
+  } catch (e) { attente(false); return alerte("Les fiches n'ont pas pu être préparées."); }
+  attente(false);
+  if (!liste.length) { SEL.clear(); return retour(); }
+  liste.sort((a, b) => (a.d ? a.d.getTime() : 0) - (b.d ? b.d.getTime() : 0) || a.n.localeCompare(b.n));
+  const ens = (S.donnees.classes[liste[0].n] || {}).enseignant || {};
+  const donnees = {format: "GestionEcole-fiches-1", ecole: S.donnees.nom_ecole || "", annee: anneeScolaire(), code: S.code.slice(0, 3),
+    maitre: ((ens.prenom || "") + " " + (ens.nom || "")).trim(), classes: [...new Set(liste.map(x => x.n))], envoye_le: new Date().toISOString(),
+    fiches: liste.map(x => ({classe: x.n, semaine: x.s, activite: x.l.act, i: x.l.i, lecon: x.l.lecon, jour: x.l.jour,
+                             date: x.d ? texteDate(x.d) : "", etat: x.etat, fiche: {champs: x.f.champs, etapes: x.f.etapes, encadres: x.f.encadres || null, grille_eleve: x.f.grille_eleve || null}}))};
+  const b64 = octetsUtf8EnB64(JSON.stringify(donnees));
+  const dates = [...new Set(liste.map(x => x.d ? texteDate(x.d) : ""))];
+  const quand = dates.length === 1 && dates[0] ? (nomJour(liste[0].d) + "_" + dates[0].replace(/\//g, "-")) : "semaine_" + liste[0].s;
+  const nom = "Fiches_" + sansAccents(donnees.classes.join("_")) + "_" + sansAccents(quand);
+  const noter = () => {
+    for (const x of liste) pedago(x.n).envois[x.cle] = Date.now();
+    garderMemoire(); SEL.clear();
+  };
+  window.pdfEchec = async () => {               // le téléphone n'a pas pu faire le PDF : on envoie la page (même contenu)
+    const r = await partagerFichier(nom + ".html", pageFichesHtml(liste, b64, false));
+    if (r !== "annule") { noter(); retour(); }
+  };
+  if (window.Android && Android.fairePdf) {
+    try { Android.fairePdf(nom + ".pdf", pageFichesHtml(liste, null, true), b64); noter(); return retour(); }
+    catch (e) { /* ancienne version de l'application : la page */ }
+  }
+  return window.pdfEchec();
 }
 
 /* ---------- 11. Installer sur l'écran d'accueil ---------- */

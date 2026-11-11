@@ -171,7 +171,10 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 import android.widget.Toast;
+import android.graphics.Canvas;
+import android.graphics.pdf.PdfDocument;
 
 import androidx.core.content.FileProvider;
 import androidx.webkit.WebViewAssetLoader;
@@ -188,6 +191,7 @@ import java.nio.charset.StandardCharsets;
 public class MainActivity extends Activity {
     private static final int CHOIX_FICHIER = 7;
     private WebView web;
+    private FrameLayout conteneur;
     private ValueCallback<Uri[]> choix;
     private String attenteNom = null, attenteTexte = null;     // fichier reçu de WhatsApp, en attente du code
 
@@ -195,8 +199,11 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle etat) {
         super.onCreate(etat);
         getWindow().setStatusBarColor(0xFFC62828);
+        WebView.enableSlowWholeDocumentDraw();      // étape 305 : pour dessiner toute la page des fiches dans le PDF
         web = new WebView(this);
-        setContentView(web);
+        conteneur = new FrameLayout(this);
+        conteneur.addView(web, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        setContentView(conteneur);
         WebSettings r = web.getSettings();
         r.setJavaScriptEnabled(true);
         r.setDomStorageEnabled(true);          // la classe et les notes restent dans le téléphone
@@ -355,12 +362,113 @@ public class MainActivity extends Activity {
                 }
             });
         }
+
+        // Étape 305 : les fiches cochées -> un PDF A4 (avec les données pour l'ordinateur du directeur), envoyé par WhatsApp
+        @JavascriptInterface
+        public void fairePdf(final String nom, final String html, final String donnees) {
+            runOnUiThread(() -> new FabriquePdf(nom, html, donnees).demarrer());
+        }
+    }
+
+    private class FabriquePdf {
+        final int LARGEUR = 794, HAUTEUR = 1123;        // une page A4 en points d'écran (96 par pouce)
+        final String nom, html, donnees;
+        final float densite = getResources().getDisplayMetrics().density;
+        WebView w;
+        boolean fini = false;
+
+        FabriquePdf(String nom, String html, String donnees) { this.nom = nom; this.html = html; this.donnees = donnees; }
+
+        int px(int css) { return Math.round(css * densite); }
+
+        void demarrer() {
+            try {
+                w = new WebView(MainActivity.this);
+                WebSettings r = w.getSettings();
+                r.setJavaScriptEnabled(true);
+                r.setTextZoom(100);
+                r.setAllowFileAccess(false);
+                w.setVerticalScrollBarEnabled(false);
+                w.setHorizontalScrollBarEnabled(false);
+                conteneur.addView(w, 0, new FrameLayout.LayoutParams(px(LARGEUR), px(HAUTEUR)));   // derrière l'application
+                w.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public void onPageFinished(WebView v, String url) {
+                        if (fini) return;
+                        fini = true;
+                        w.postDelayed(() -> paginer(), 500);
+                    }
+                });
+                Toast.makeText(MainActivity.this, "Préparation du PDF…", Toast.LENGTH_SHORT).show();
+                w.loadDataWithBaseURL("https://appassets.androidplatform.net/assets/", html, "text/html", "utf-8", null);
+            } catch (Exception e) {
+                echec(e);
+            }
+        }
+
+        void paginer() {
+            w.evaluateJavascript("paginerPourPdf()", v -> {
+                try {
+                    int pages = Math.max(1, Integer.parseInt(v.replaceAll("[^0-9]", "")));
+                    w.setLayoutParams(new FrameLayout.LayoutParams(px(LARGEUR), px(HAUTEUR * pages)));
+                    w.postDelayed(() -> dessiner(pages), 900);
+                } catch (Exception e) {
+                    echec(e);
+                }
+            });
+        }
+
+        void dessiner(int pages) {
+            PdfDocument doc = new PdfDocument();
+            try {
+                float echelle = 595f / px(LARGEUR);
+                for (int p = 0; p < pages; p++) {
+                    PdfDocument.Page page = doc.startPage(new PdfDocument.PageInfo.Builder(595, 842, p + 1).create());
+                    Canvas c = page.getCanvas();
+                    c.scale(echelle, echelle);
+                    c.translate(0, -p * HAUTEUR * densite);
+                    w.draw(c);
+                    doc.finishPage(page);
+                }
+                File dossier = new File(getCacheDir(), "envois");
+                dossier.mkdirs();
+                File f = new File(dossier, nom.replaceAll("[^A-Za-z0-9._-]", "_"));
+                try (FileOutputStream o = new FileOutputStream(f)) {
+                    doc.writeTo(o);
+                    // après la fin du PDF : les fiches en texte, pour l'ordinateur du directeur (les lecteurs PDF l'ignorent)
+                    o.write(("\n%DSOB-FICHES " + donnees + "\n").getBytes(StandardCharsets.US_ASCII));
+                }
+                doc.close();
+                retirer();
+                Uri u = FileProvider.getUriForFile(MainActivity.this, "%(paquet)s.fichiers", f);
+                Intent i = new Intent(Intent.ACTION_SEND);
+                i.setType("application/pdf");
+                i.putExtra(Intent.EXTRA_STREAM, u);
+                i.putExtra(Intent.EXTRA_TEXT, "Mes fiches de préparation");
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(Intent.createChooser(i, "Envoyer les fiches au directeur"));
+            } catch (Exception e) {
+                try { doc.close(); } catch (Exception x) { }
+                echec(e);
+            }
+        }
+
+        void retirer() {
+            try { conteneur.removeView(w); w.destroy(); } catch (Exception e) { }
+        }
+
+        void echec(Exception e) {
+            retirer();
+            Toast.makeText(MainActivity.this, "PDF impossible (" + e.getMessage() + ") : les fiches partent en page web.", Toast.LENGTH_LONG).show();
+            web.evaluateJavascript("(window.pdfEchec && pdfEchec())", null);
+        }
     }
 }
 """.replace("%(paquet)s", PAQUET))
 
 # l'application elle-même, rangée dans l'APK
-for nom in ("index.html", "manifest.webmanifest", "icone-192.png", "icone-512.png"):
+for nom in ("index.html", "manifest.webmanifest", "icone-192.png", "icone-512.png",
+            "contenu_CE1.bin", "contenu_CE2.bin", "contenu_CM1.bin", "contenu_CM2.bin"):     # étape 305 : les fiches
     copier(nom, "app/src/main/assets/" + nom)
 copier("icone-192.png", "app/src/main/res/mipmap-xxxhdpi/ic_launcher.png")
 print("Projet Android prêt : version 1." + str(NUMERO))
