@@ -1080,10 +1080,10 @@ function ecranLicence(retour, message) {
 }
 
 /* ---------- 12. Étape 305 : MA RÉPARTITION et MES FICHES (le maître les fait sur son téléphone) ----------
-   Le contenu (guide, répartitions, fiches toutes prêtes du CE1 au CM2) est rangé dans l'application, chiffré :
+   Le contenu (guide, répartitions, fiches toutes prêtes du CP au CM2) est rangé dans l'application, chiffré :
    la clé arrive dans le fichier de la classe. Ce que le maître change reste dans le téléphone (M.pedago).
    Le soir, il coche des fiches et les envoie au directeur en PDF (WhatsApp). */
-const NIVEAUX_FICHES = ["CE1", "CE2", "CM1", "CM2"];
+const NIVEAUX_FICHES = ["CP", "CE1", "CE2", "CM1", "CM2"];      // étape 346 : le CP aussi
 const JOURS_SEM = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"];
 const ORDINAUX = ["Première", "Deuxième", "Troisième", "Quatrième", "Cinquième", "Sixième", "Septième", "Huitième", "Neuvième", "Dixième"];
 const CONTENUS = {};
@@ -1114,7 +1114,7 @@ async function contenuNiveau(niv) {
 // Charge le contenu, ou explique pourquoi c'est impossible ; puis appelle suite(C)
 async function avecContenu(n, retour, suite) {
   if (!NIVEAUX_FICHES.includes(niveauDe(n)))
-    return ecran("Pédagogie", n, '<div class="message info">Les répartitions et les fiches toutes prêtes existent du CE1 au CM2. '
+    return ecran("Pédagogie", n, '<div class="message info">Les répartitions et les fiches toutes prêtes existent du CP au CM2. '
       + "Elles n'existent pas encore pour le " + esc(niveauDe(n)) + ".</div>", retour);
   if (!infoTel())
     return ecran("Pédagogie", n, '<div class="message info"><b>Il manque une mise à jour de votre classe.</b><br>'
@@ -1144,17 +1144,110 @@ function repartitionTel(n, R) {
   if (p.reps[R]) return p.reps[R];
   const o = ((S.donnees.classes[n] || {}).repartitions || {})[R];
   if (o && (Object.keys(o.contenus || {}).length || (o.semaines || []).some(x => x && x[0])))
-    return {semaines: clone(o.semaines || []), contenus: clone(o.contenus || {}), ordinateur: true};
+    return {semaines: clone(o.semaines || []), contenus: clone(o.contenus || {}), numeros: clone(o.numeros || null),
+            v343: !!o.v343, ordinateur: true};
   return null;
+}
+/* --- Étape 344 : une répartition par mois du calendrier, comme l'ordinateur (étape 343) ---
+   Une répartition = les semaines (lundi-vendredi) d'un mois ; une semaine à cheval va dans le mois de son mercredi ;
+   vacances et compositions sautées (calendrier envoyé par l'ordinateur). Les semaines du guide se suivent. */
+const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
+const MOIS_COURTS = ["Janv.", "Févr.", "Mars", "Avril", "Mai", "Juin", "Juil.", "Août", "Sept.", "Oct.", "Nov.", "Déc."];
+const NB_SEM_MAX = 5;
+const moisDe = d => d.getFullYear() + "-" + pad2(d.getMonth() + 1);
+function semainesCours() {                     // [[lundi, premier jour, dernier jour, "AAAA-MM"]]
+  let l = ((infoTel() || {}).semaines_cours || []).map(x => [String(x[0]), String(x[1])]);
+  if (!l.length) {                            // pas de calendrier : lundi-vendredi depuis le 1er lundi d'octobre
+    const y = +anneeScolaire().slice(0, 4); let d = lundiDe(new Date(y, 9, 7));
+    for (let k = 0; k < 40; k++) { const v = new Date(d); v.setDate(v.getDate() + 4); l.push([texteDate(d), texteDate(v)]); d.setDate(d.getDate() + 7); }
+  }
+  return l.map(([a, b]) => {
+    const da = enDate(a), db = enDate(b); if (!da || !db) return null;
+    const lu = lundiDe(da), me = new Date(lu); me.setDate(me.getDate() + 2);
+    return [lu, da, db, moisDe(me)];
+  }).filter(x => x);
+}
+function moisMajoritaire(sem) {               // le mois qui a le plus de jours de classe dans ces semaines
+  const compte = {};
+  for (const [du, au] of sem) {
+    const a = enDate(du), b = enDate(au || du); if (!a || !b || (b - a) / 86400000 > 10) continue;
+    for (const d = new Date(a); d <= b; d.setDate(d.getDate() + 1))
+      if (d.getDay() >= 1 && d.getDay() <= 5) compte[moisDe(d)] = (compte[moisDe(d)] || 0) + 1;
+  }
+  const cles = Object.keys(compte).sort(); if (!cles.length) return null;
+  const m = Math.max(...cles.map(c => compte[c])); return cles.find(c => compte[c] === m);
+}
+function planRep(n) {                          // toutes les répartitions de l'année, dans l'ordre
+  const cal = semainesCours(), p = pedago(n), o = (S.donnees.classes[n] || {}).repartitions || {};
+  const cles = Object.keys(p.reps).concat(Object.keys(o)).filter(c => /^R\d+$/.test(c)).map(c => +c.slice(1));
+  const maxCle = cles.length ? Math.max(...cles) : 0;
+  let plan = [], curseur = null, numMax = 0;
+  for (let r = 1; r <= 40; r++) {
+    const cle = "R" + pad2(r), rec = repartitionTel(n, cle) || {}, depart = numMax;
+    let sem = (rec.semaines || []).slice(0, NB_SEM_MAX).map(x => [String((x || [])[0] || ""), String((x || [])[1] || "")]);
+    const datees = sem.map((x, k) => x[0] ? k : -1).filter(k => k >= 0);
+    let nums, projete, mois;
+    if (datees.length) {
+      sem = sem.slice(0, Math.max(...datees) + 1);
+      if (rec.numeros && rec.numeros.length) nums = sem.map((x, k) => x[0] ? (rec.numeros[k] || null) : null);
+      else if (!rec.v343) { nums = sem.map((x, k) => x[0] ? 4 * (r - 1) + k + 1 : null); numMax = Math.max(numMax, 4 * r); }
+      else { let x = numMax; nums = sem.map(w => w[0] ? ++x : null); }
+      projete = false; mois = moisMajoritaire(sem);
+    } else {
+      const reste = cal.filter(w => !curseur || w[0] > curseur);
+      if (!reste.length && r > maxCle) break;
+      const g = [];
+      for (const w of reste) { if (w[3] !== reste[0][3] || g.length >= NB_SEM_MAX) break; g.push(w); }
+      sem = g.map(w => [texteDate(w[1]), texteDate(w[2])]); nums = g.map((w, k) => numMax + 1 + k);
+      projete = true; mois = g.length ? g[0][3] : null;
+    }
+    plan.push({cle, semaines: sem, numeros: nums, projete, mois, depart});
+    const fins = sem.filter(w => w[0]).map(w => enDate(w[1] || w[0])).filter(d => d);
+    if (fins.length) curseur = new Date(Math.max(...fins));
+    const v = nums.filter(x => x); if (v.length) numMax = Math.max(numMax, ...v);
+  }
+  if (!plan.length) plan = [{cle: "R01", semaines: [], numeros: [], projete: true, mois: null, depart: 0}];
+  const vus = new Set();
+  for (const it of plan) { it.fin = !!(it.mois && vus.has(it.mois)); if (it.mois) vus.add(it.mois); }
+  return plan;
+}
+function plageRep(sem) {                       // « du 2 au 12 novembre »
+  const d = sem.flatMap(w => [w[0], w[1]]).map(enDate).filter(x => x); if (!d.length) return "";
+  const a = new Date(Math.min(...d)), b = new Date(Math.max(...d)), j = x => x.getDate() === 1 ? "1er" : String(x.getDate());
+  return a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear()
+    ? "du " + j(a) + " au " + j(b) + " " + MOIS[b.getMonth()]
+    : "du " + j(a) + " " + MOIS[a.getMonth()] + " au " + j(b) + " " + MOIS[b.getMonth()];
+}
+function nomRep(it) {                          // « Répartition de fin novembre »
+  if (!it || !it.mois) return it ? "Répartition " + (+it.cle.slice(1)) : "Répartition";
+  const nom = MOIS[+it.mois.slice(5) - 1];
+  return "Répartition " + (it.fin ? "de fin " + nom : (/^[aeiou]/.test(nom) ? "d'" : "de ") + nom);
+}
+function courtRep(it) {
+  if (!it.mois) return +it.cle.slice(1) === 1 ? "1re" : (+it.cle.slice(1)) + "e";
+  const c = MOIS_COURTS[+it.mois.slice(5) - 1]; return it.fin ? "Fin " + c.toLowerCase() : c;
+}
+function posSemaine(n, s) {                    // semaine de l'année -> [répartition, colonne, répartition]
+  for (const it of planRep(n)) { const k = it.numeros.indexOf(s); if (k >= 0) return [it.cle, k, it]; }
+  return ["R00", 0, null];
+}
+function numerosAnnee(n) { return [...new Set(planRep(n).flatMap(it => it.numeros.filter(x => x)))].sort((a, b) => a - b); }
+function repDuMoment(n) {
+  const auj = new Date(); auj.setHours(0, 0, 0, 0); const plan = planRep(n);
+  for (const it of plan) {
+    const d = it.semaines.flatMap(w => [w[0], w[1]]).map(enDate).filter(x => x);
+    if (d.length && auj <= new Date(Math.max(...d) + 2 * 86400000)) return it.cle;
+  }
+  return plan[plan.length - 1].cle;
 }
 function texteGuide(C, act, s) { return ((C.guide[act] || [])[s - 1]) || ""; }
 function texteCase(n, C, act, s) {          // ce qui est écrit dans la case (répartition, sinon guide)
-  const rep = repartitionTel(n, cleR(s)), k = (s - 1) % 4;
+  const [R, k] = posSemaine(n, s), rep = repartitionTel(n, R);
   const t = rep && rep.contenus && rep.contenus[act] ? String(rep.contenus[act][k] || "").trim() : "";
   return t || texteGuide(C, act, s);
 }
 function leconsTextes(n, C, s, act) {        // comme fiche_lecons_semaine de l'ordinateur
-  const rep = repartitionTel(n, cleR(s)), k = (s - 1) % 4;
+  const [R, k] = posSemaine(n, s), rep = repartitionTel(n, R);
   const t = rep && rep.contenus && rep.contenus[act] ? String(rep.contenus[act][k] || "").trim() : "";
   let morceaux;
   if (t && t !== texteGuide(C, act, s)) morceaux = t.split(/\n| ; | · /).map(m => m.replace(/^S\d+\s*/, "").trim());
@@ -1170,10 +1263,93 @@ function joursActivite(n, C, act) {
   const j = ((infoTel() || {}).jours || {})[n];
   return (j && j[act]) || C.jours[act] || [];
 }
+/* --- étape 324 : CE1 MOHEBS — les séances de langue recopiées du guide, d'après la semaine du guide de la classe --- */
+const MOHEBS_TITRE = "Langue et communication (MOHEBS)";
+function mohebsActif(n, C) {
+  const m = C && C.mohebs;
+  if (!m || niveauDe(n) !== "CE1") return false;
+  const an = anneeScolaire(), cles = Object.keys(m.annees || {}).sort();
+  const l = (m.annees || {})[an] || (cles.length ? m.annees[cles[cles.length - 1]] : []);
+  if (!l.includes("CE1")) return false;
+  const edt = (S.donnees.classes[n] || {}).edt || {};
+  return edt.type !== "2e étape";             // ancien emploi du temps du CE1 : anciennes fiches
+}
+function mohebsDecalage(n) {                  // semaine du guide = semaine de l'année + décalage
+  const p = pedago(n);
+  if (typeof p.mohebs_decalage === "number") return p.mohebs_decalage;      // réglé sur ce téléphone
+  let v = (S.donnees.classes[n] || {}).mohebs_decalage || 0;                // réglé sur l'ordinateur
+  if (v && typeof v === "object") v = v[anneeScolaire()] || 0;
+  else if (anneeScolaire() !== "2026-2027") v = 0;
+  return +v || 0;
+}
+const mohebsSemaine = (n, s) => s + mohebsDecalage(n);
+function mohebsLecons(n, C, s) {
+  const m = C.mohebs, sg = mohebsSemaine(n, s), lecons = [], sans = [];
+  const bloc = m.semaines[String(sg)];
+  if (!bloc) {
+    if (sg < 1) sans.push([MOHEBS_TITRE, "Semaine " + sg + " : la classe n'est pas encore à la semaine 1 du guide MOHEBS."]);
+    else sans.push([MOHEBS_TITRE, "Semaine " + sg + " du guide : le tome 2 du guide MOHEBS du CE1 n'est pas encore disponible dans ce logiciel."]);
+    return {lecons, sans};
+  }
+  bloc.sans.forEach(x => sans.push(x));
+  const langue = S.donnees.langue_nationale || "";
+  for (const [jour, act, i, lecon] of bloc.lecons) {
+    if (/ L1$/.test(act) && langue && langue !== m.langue) {
+      sans.push([act + " (" + jour + ")", "Leçon en " + langue + " : voir le guide MOHEBS du CE1 en " + langue + " (pas encore dans le logiciel)."]);
+      continue;
+    }
+    lecons.push({act, i, lecon, jour, sg});
+  }
+  return {lecons, sans};
+}
+function bandeMohebs(n, C, s) {                // la bande jaune au-dessus des fiches
+  const sg = mohebsSemaine(n, s), fin = C.mohebs.derniere;
+  let h = '<div class="carte" style="background:#FFF8E1;border:1px solid #E0A800">'
+    + '<p style="margin:0;font-size:18px;font-weight:bold;color:#7A5200">📘 ' + esc(niveauDe(n)) + " : semaine " + sg + " du guide MOHEBS</p>";
+  if (sg >= 12 && sg <= fin) {
+    const reste = fin - sg + 1;
+    h += '<p style="margin:6px 0 0;font-weight:bold;color:#B26A00">⚠ Attention : il reste ' + reste + (reste > 1 ? " semaines" : " semaine")
+      + " de fiches de langue MOHEBS dans le logiciel (jusqu'à la semaine " + fin + ").</p>";
+  } else if (sg > fin)
+    h += '<p style="margin:6px 0 0;font-weight:bold;color:#B26A00">Le tome 2 du guide MOHEBS du CE1 n\'est pas encore disponible dans ce logiciel. Les autres fiches sont là comme d\'habitude.</p>';
+  return h + '<button class="gros contour" id="b-sem-guide" style="margin:10px 0 0;font-size:15px;padding:10px">Changer la semaine du guide</button></div>';
+}
+function ecranSemaineGuide(n, s) {
+  avecContenu(n, () => ecranFiches(n, s), C => {
+    const fin = Math.max(C.mohebs.derniere, 14), actuelle = mohebsSemaine(n, s);
+    let choix = actuelle >= 1 && actuelle <= fin ? actuelle : 1;
+    const [du, au] = datesSemaine(n, s);
+    const dessiner = () => {
+      let h = '<div class="carte"><p style="font-size:17px">Cette semaine' + (du ? " (du " + esc(du) + (au ? " au " + esc(au) : "") + ")" : "")
+        + ", la classe est à la semaine :</p><div style='display:grid;grid-template-columns:repeat(7,1fr);gap:6px'>";
+      for (let k = 1; k <= fin; k++)
+        h += '<button data-sg="' + k + '" style="font-size:18px;font-weight:bold;padding:10px 0;border-radius:8px;border:2px solid '
+          + (k === choix ? "var(--rouge);background:var(--rouge);color:white" : "#E0B4B0;background:#F9DCDA;color:#111") + '">' + k + "</button>";
+      h += '</div><p style="font-size:18px;font-weight:bold;color:var(--rouge);margin:12px 0 4px">Semaine choisie : ' + choix + " du guide</p>"
+        + "<p class='gris'>Le maître qui recommence choisit 1 ; celui qui continue garde sa semaine. Ensuite, la semaine avance toute seule chaque semaine.</p></div>";
+      ecran("Semaine du guide MOHEBS", n, h, () => ecranFiches(n, s),
+        '<button class="gros vert" id="b-enreg">Enregistrer</button><button class="gros contour" id="b-annuler">Annuler</button>');
+      document.querySelectorAll("[data-sg]").forEach(b => b.onclick = () => { choix = +b.dataset.sg; dessiner(); });
+      $("b-annuler").onclick = () => ecranFiches(n, s);
+      $("b-enreg").onclick = () => {
+        pedago(n).mohebs_decalage = choix - s;
+        if (!garderMemoire()) return;
+        ecranFiches(n, s, '<div class="message ok">✓ ' + esc(niveauDe(n)) + " : semaine " + choix + " du guide MOHEBS.</div>");
+      };
+    };
+    dessiner();
+  });
+}
 function fichesSemaine(n, C, s) {
+  if (C.lecons) {                              // étape 346 : CP (fiches bilingues L1 / L2) : la liste faite par l'ordinateur
+    const sans = ((C.sans || {})[s] || []).map(x => [x[0], x[1] || ""]);
+    return {lecons: (C.lecons[s] || []).map(([jour, act, i, lecon]) => ({act, i, lecon, jour})), sans};
+  }
   const presentes = new Set(C.domaines.flatMap(d => d[1])), lecons = [], sans = [];
+  const mohebs = mohebsActif(n, C), exclues = new Set(mohebs ? C.mohebs.exclues : []);
+  if (mohebs) { const r = mohebsLecons(n, C, s); lecons.push(...r.lecons); sans.push(...r.sans); }
   for (const act of C.activites_fiches) {
-    if (!presentes.has(act)) continue;
+    if (!presentes.has(act) || exclues.has(act)) continue;
     const textes = leconsTextes(n, C, s, act), vraies = textes.filter(t => !pasUneLecon(t));
     if ((textes.length && !vraies.length) || (vraies.length && C.pasFiche.has(s + "|" + act))) { sans.push([act, textes[0] || ""]); continue; }
     const jours = joursActivite(n, C, act);
@@ -1198,18 +1374,9 @@ function semainesCalendrier(n) {
   if (debut) { const k = l.findIndex(x => { const a = enDate(x[1]); return a && a >= debut; }); if (k > 0) l = l.slice(k); }
   return l;
 }
-function datesSemaine(n, s) {                // [du, au] de la semaine s (textes), ou ["", ""]
-  const propre = s2 => { const rep = repartitionTel(n, cleR(s2)), w = rep && rep.semaines && rep.semaines[(s2 - 1) % 4];
-                         return w && w[0] ? [String(w[0]), String(w[1] || "")] : null; };
-  const ici = propre(s); if (ici) return ici;
-  const cal = semainesCalendrier(n);
-  for (let s2 = s - 1; s2 >= 1; s2--) {       // la dernière semaine connue avant, puis les semaines de cours qui suivent
-    const w = propre(s2); if (!w) continue;
-    const k = cal.findIndex(x => x[0] === w[0] || (enDate(x[0]) && enDate(w[0]) && lundiDe(enDate(x[0])).getTime() === lundiDe(enDate(w[0])).getTime()));
-    if (k >= 0 && cal[k + s - s2]) return cal[k + s - s2];
-    break;
-  }
-  return cal[s - 1] || ["", ""];
+function datesSemaine(n, s) {                // [du, au] de la semaine s (textes), ou ["", ""] — étape 344
+  const [, k, it] = posSemaine(n, s);
+  return it && it.semaines[k] && it.semaines[k][0] ? [it.semaines[k][0], it.semaines[k][1] || ""] : ["", ""];
 }
 function dateDuJour(n, s, jour) {
   const du = enDate(datesSemaine(n, s)[0]); if (!du) return null;
@@ -1217,12 +1384,11 @@ function dateDuJour(n, s, jour) {
   if (k >= 0) d.setDate(d.getDate() + k); else return du;
   return d;
 }
-function nbSemaines(C) { return C.nb_rep * 4; }
 function semaineDuJour(n, C) {
   const auj = new Date(); auj.setHours(0, 0, 0, 0);
   if (auj.getDay() === 0 || auj.getDay() === 6) auj.setDate(auj.getDate() + (auj.getDay() === 6 ? 2 : 1));
-  let choix = 1;
-  for (let s = 1; s <= nbSemaines(C); s++) { const d = enDate(datesSemaine(n, s)[0]); if (d && lundiDe(d) <= auj) choix = s; }
+  const l = numerosAnnee(n); let choix = l[0] || 1;
+  for (const s of l) { const d = enDate(datesSemaine(n, s)[0]); if (d && lundiDe(d) <= auj) choix = s; }
   return choix;
 }
 function demain() {                           // le prochain jour de classe (le vendredi : lundi)
@@ -1241,7 +1407,9 @@ function ficheVide(n, C, l) {
 function ficheDe(n, C, s, l) {
   const cle = s + "|" + l.act + "|" + l.i, m = pedago(n).fiches[cle];
   let f, etat;
+  const gm = l.i >= 100 && C.mohebs ? C.mohebs.fiches[l.sg + "|" + l.i] : null;      // étape 324 : séance du guide MOHEBS
   if (m && m.lecon === l.lecon) { f = clone(m); etat = "Modifiée"; }
+  else if (gm) { f = clone(gm); etat = "Prête"; }
   else {
     let g = C.fiches[cle];
     if (!g || g.lecon !== l.lecon) g = C.fiches[C.parLecon[l.act + "|" + l.lecon]] || null;
@@ -1250,6 +1418,7 @@ function ficheDe(n, C, s, l) {
   }
   const d = dateDuJour(n, s, l.jour);
   f.champs.cours = n; f.champs.date = d ? texteDate(d) : "……/……/………"; f.champs.contenu = f.champs.contenu || l.lecon;
+  if (l.i >= 100) f.mohebs = true;
   return {f, etat, cle, d};
 }
 const couleurEtat = e => e === "Prête" ? "var(--vert)" : e === "Modifiée" ? "#1A3E8C" : "#B26A00";
@@ -1266,36 +1435,39 @@ function premiereClasseFiches() { return classesFiches()[0] || nomsClasses()[0];
 function ecranRepartition(n, R, message) {
   n = n || premiereClasseFiches();
   avecContenu(n, ecranClasse, C => {
-    const nb = C.nb_rep; R = R || cleR(semaineDuJour(n, C));
-    const num = +R.slice(1), p = pedago(n), rep = repartitionTel(n, R);
+    const plan = planRep(n);
+    if (!R || !plan.some(x => x.cle === R)) R = repDuMoment(n);
+    const it = plan.find(x => x.cle === R), nbS = it.semaines.length || 4, nums = it.numeros;
+    const p = pedago(n), rep = repartitionTel(n, R), vus = nums.filter(x => x);
     const ouvert = EP && EP.type === "rep" && EP.n === n && EP.R === R;
     let html = (message || "") + ongletsClasses(n);
     html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">';
-    for (let r = 1; r <= nb; r++) {
-      const c = "R" + pad2(r), faite = !!(p.reps[c] || (repartitionTel(n, c) || {}).ordinateur);
+    for (const x of plan) {
+      const c = x.cle, faite = !!(p.reps[c] || (repartitionTel(n, c) || {}).ordinateur);
       html += '<button data-r="' + c + '" style="flex:1 0 54px;font-size:16px;font-weight:bold;padding:9px 4px;border-radius:9px;border:2px solid '
         + (c === R ? "var(--rouge);background:var(--rouge);color:white" : "#CCC;background:white;color:" + (faite ? "var(--vert)" : "#555")) + '">'
-        + (r === 1 ? "1re" : r + "e") + (faite ? " ✓" : "") + "</button>";
+        + courtRep(x) + (faite ? " ✓" : "") + "</button>";
     }
     html += "</div>";
-    const s0 = (num - 1) * 4 + 1;
-    html += '<div class="carte"><h2>' + ORDINAUX[num - 1] + " répartition</h2><p class='gris'>Semaines " + s0 + " à " + (s0 + 3) + " du guide · "
+    const plage = plageRep(it.semaines);
+    html += '<div class="carte"><h2>' + esc(nomRep(it)) + "</h2><p class='gris'>" + (plage ? esc(plage) + " · " : "")
+      + (vus.length ? "semaines " + vus[0] + " à " + vus[vus.length - 1] + " du guide · " : "")
       + (p.reps[R] ? "<b style='color:#1A3E8C'>modifiée sur ce téléphone</b>" : rep && rep.ordinateur ? "faite sur l'ordinateur" : "celle du guide pédagogique") + "</p>";
-    for (let k = 0; k < 4; k++) {
-      const [du, au] = datesSemaine(n, s0 + k);
+    for (let k = 0; k < nbS; k++) {
+      const [du, au] = it.semaines[k] || ["", ""];
       html += ouvert
         ? '<div class="deux" style="align-items:center;margin-top:6px"><div style="flex:0 0 74px;font-weight:bold">Sem. ' + (k + 1) + '</div><div><input type="text" inputmode="numeric" data-du="' + k + '" value="' + esc(EP.v.semaines[k][0]) + '" placeholder="du"></div><div><input type="text" inputmode="numeric" data-au="' + k + '" value="' + esc(EP.v.semaines[k][1]) + '" placeholder="au"></div></div>'
         : "<p style='margin:3px 0'><b>Semaine " + (k + 1) + "</b> : " + (du ? "du " + esc(du) + (au ? " au " + esc(au) : "") : "<span class='gris'>dates pas encore fixées</span>") + "</p>";
     }
-    if (ouvert) html += '<p class="gris">Dates : jour/mois/année (ex : 06/10/2026). Laissez vide pour suivre le calendrier de l\'école.</p>';
+    if (ouvert) html += '<p class="gris">Dates : jour/mois/année (ex : 06/10/2026). Laissez vide pour suivre le calendrier de l\'école (mois par mois, vacances et compositions sautées).</p>';
     html += "</div>";
     for (const [dom, acts] of C.domaines) {
       if (!acts.length) continue;
       html += '<h2 style="color:var(--rouge);margin:16px 0 8px">' + esc(dom) + "</h2>";
       for (const act of acts) {
         html += '<div class="carte" style="padding:12px 14px"><b>' + esc(act) + "</b>";
-        for (let k = 0; k < 4; k++) {
-          const s = s0 + k, t = ouvert ? EP.v.contenus[act][k] : texteCase(n, C, act, s);
+        for (let k = 0; k < nbS; k++) {
+          const s = nums[k], t = ouvert ? EP.v.contenus[act][k] : (s ? texteCase(n, C, act, s) : "");
           html += ouvert
             ? '<label class="gris" style="display:block;margin-top:8px">Semaine ' + (k + 1) + '</label><textarea rows="2" data-act="' + esc(act) + '" data-k="' + k + '" style="font-size:16px">' + esc(t) + "</textarea>"
             : '<p style="margin:6px 0 0;font-size:16px"><span class="gris">S' + (k + 1) + " :</span> " + (t ? esc(t).replace(/\n/g, "<br>") : "<span class='gris'>—</span>") + "</p>";
@@ -1306,7 +1478,7 @@ function ecranRepartition(n, R, message) {
     if (!ouvert && p.reps[R]) html += '<button class="gros contour" id="b-guide">↺ Revenir à la répartition ' + (rep && rep.ordinateur ? "" : "du guide") + "</button>";
     const barre = ouvert ? '<button class="gros vert" id="b-enreg">Enregistrer</button><button class="gros contour" id="b-annuler">Annuler</button>'
                          : '<button class="gros" id="b-modifier">Modifier</button>';
-    ecran("Ma répartition", n + " · " + ORDINAUX[num - 1].toLowerCase() + " répartition", html, () => { EP = null; ecranClasse(); }, barre);
+    ecran("Ma répartition", n + " · " + nomRep(it).toLowerCase(), html, () => { EP = null; ecranClasse(); }, barre);
     brancherOnglets(c => { EP = null; ecranRepartition(c); });
     document.querySelectorAll("[data-r]").forEach(b => b.onclick = () => { if (peutQuitter()) { EP = null; ecranRepartition(n, b.dataset.r); } });
     const lire = () => {
@@ -1320,7 +1492,7 @@ function ecranRepartition(n, R, message) {
       $("b-annuler").onclick = () => { EP = null; avantDeQuitter = null; ecranRepartition(n, R); };
       $("b-enreg").onclick = () => {
         lire();
-        for (let k = 0; k < 4; k++) {
+        for (let k = 0; k < nbS; k++) {
           const [du, au] = EP.v.semaines[k];
           for (const t of [du, au]) if (t && !enDate(t)) return messageBarre("Semaine " + (k + 1) + " : la date « " + t + " » n'est pas valable (jour/mois/année).");
           if (du && au && !(enDate(au) >= enDate(du) && (enDate(au) - enDate(du)) / 86400000 <= 6))
@@ -1328,10 +1500,18 @@ function ecranRepartition(n, R, message) {
         }
         const contenus = {};
         for (const act of Object.keys(EP.v.contenus)) {
-          const l = EP.v.contenus[act].map((t, k) => t === texteGuide(C, act, s0 + k) ? "" : t);   // inchangé = le guide
+          const l = EP.v.contenus[act].map((t, k) => nums[k] && t === texteGuide(C, act, nums[k]) ? "" : t);   // inchangé = le guide
           if (l.some(x => x)) contenus[act] = l;
         }
-        p.reps[R] = {semaines: EP.v.semaines, contenus, le: Date.now()};
+        // étape 344 : les semaines du guide de chaque colonne (les mêmes si les dates n'ont pas changé, sinon la suite)
+        const datees = EP.v.semaines.filter(w => w[0]);
+        let numeros = null;
+        if (datees.length) {
+          if (!it.projete && JSON.stringify(it.semaines.filter(w => w[0])) === JSON.stringify(datees))
+            numeros = EP.v.semaines.map((w, k) => w[0] ? (nums[k] || null) : null);
+          else { let x = it.depart; numeros = EP.v.semaines.map(w => w[0] ? ++x : null); }
+        }
+        p.reps[R] = {semaines: EP.v.semaines, contenus, numeros, v343: true, le: Date.now()};
         if (!garderMemoire()) return;
         EP = null; avantDeQuitter = null;
         ecranRepartition(n, R, '<div class="message ok">✓ Répartition enregistrée. Vos fiches suivent cette répartition.</div>');
@@ -1339,8 +1519,9 @@ function ecranRepartition(n, R, message) {
     } else {
       $("b-modifier").onclick = () => {
         if (!peutTaper()) return alerte(texteLicence());
-        const v = {semaines: [0, 1, 2, 3].map(k => { const w = rep && rep.semaines && rep.semaines[k]; return w && w[0] ? [String(w[0]), String(w[1] || "")] : ["", ""]; }), contenus: {}};
-        for (const [, acts] of C.domaines) for (const act of acts) v.contenus[act] = [0, 1, 2, 3].map(k => texteCase(n, C, act, s0 + k));
+        const ks = [...Array(nbS).keys()];
+        const v = {semaines: ks.map(k => { const w = rep && rep.semaines && rep.semaines[k]; return w && w[0] ? [String(w[0]), String(w[1] || "")] : ["", ""]; }), contenus: {}};
+        for (const [, acts] of C.domaines) for (const act of acts) v.contenus[act] = ks.map(k => nums[k] ? texteCase(n, C, act, nums[k]) : "");
         EP = {type: "rep", n, R, v, depart: JSON.stringify(v)};
         ecranRepartition(n, R);
       };
@@ -1365,16 +1546,19 @@ function formaterDate(v) {                    // 06102026 -> 06/10/2026 pendant 
 function ecranFiches(n, s, message) {
   n = n || premiereClasseFiches();
   avecContenu(n, ecranClasse, C => {
-    const nb = nbSemaines(C);
-    s = Math.min(Math.max(s || semaineDuJour(n, C), 1), nb);
+    const liste = numerosAnnee(n);
+    s = s || semaineDuJour(n, C);
+    if (liste.length && !liste.includes(s)) s = liste.find(x => x >= s) || liste[liste.length - 1];
+    const sPrec = liste.filter(x => x < s).pop(), sSuiv = liste.find(x => x > s);
     const {lecons, sans} = fichesSemaine(n, C, s), p = pedago(n);
     const [du, au] = datesSemaine(n, s), dem = demain(), nomDem = nomJour(dem);
     const deDemain = lecons.filter(l => { const d = dateDuJour(n, s, l.jour); return d && d.getTime() === dem.getTime(); });
     let html = (message || "") + ongletsClasses(n);
-    html += '<div class="deux" style="margin-bottom:8px"><div><button class="gros contour" id="b-sp" style="margin:0;font-size:15px;padding:10px"' + (s <= 1 ? " disabled" : "")
-      + '>‹ Semaine ' + (s - 1) + '</button></div><div><button class="gros contour" id="b-ss" style="margin:0;font-size:15px;padding:10px"' + (s >= nb ? " disabled" : "")
-      + ">Semaine " + (s + 1) + " ›</button></div></div>";
+    html += '<div class="deux" style="margin-bottom:8px"><div><button class="gros contour" id="b-sp" style="margin:0;font-size:15px;padding:10px"' + (!sPrec ? " disabled" : "")
+      + '>‹ Semaine ' + (sPrec || "") + '</button></div><div><button class="gros contour" id="b-ss" style="margin:0;font-size:15px;padding:10px"' + (!sSuiv ? " disabled" : "")
+      + ">Semaine " + (sSuiv || "") + " ›</button></div></div>";
     html += '<p class="gris" style="text-align:center;margin:0 0 6px">' + (du ? "Du " + esc(du) + (au ? " au " + esc(au) : "") : "Dates pas encore fixées (voir « Ma répartition »)") + "</p>";
+    if (mohebsActif(n, C)) html += bandeMohebs(n, C, s);
     if (deDemain.length) html += '<button class="gros contour" id="b-demain" style="font-size:16px;padding:11px">☑ Cocher les fiches de demain (' + nomDem.toLowerCase() + " " + pad2(dem.getDate()) + "/" + pad2(dem.getMonth() + 1) + ")</button>";
     let jourCourant = null;
     for (const l of lecons) {
@@ -1396,8 +1580,9 @@ function ecranFiches(n, s, message) {
     ecran("Mes fiches", n + " · semaine " + s, html, ecranClasse,
       '<button class="gros vert" id="b-envoyer-fiches"' + (nbCoches ? "" : " disabled") + ">" + texteEnvoyerFiches() + "</button>");
     brancherOnglets(c => ecranFiches(c));
-    if ($("b-sp")) $("b-sp").onclick = () => ecranFiches(n, s - 1);
-    if ($("b-ss")) $("b-ss").onclick = () => ecranFiches(n, s + 1);
+    if ($("b-sem-guide")) $("b-sem-guide").onclick = () => { if (!peutTaper()) return alerte(texteLicence()); ecranSemaineGuide(n, s); };
+    if ($("b-sp")) $("b-sp").onclick = () => sPrec && ecranFiches(n, sPrec);
+    if ($("b-ss")) $("b-ss").onclick = () => sSuiv && ecranFiches(n, sSuiv);
     if ($("b-demain")) $("b-demain").onclick = () => { deDemain.forEach(l => SEL.add(n + "|" + s + "|" + l.act + "|" + l.i)); ecranFiches(n, s); };
     // cocher / décocher sur place : l'écran ne remonte pas en haut (étape 306)
     document.querySelectorAll("[data-coche]").forEach(b => b.onclick = () => {
@@ -1529,13 +1714,24 @@ function bandeauFicheHtml(n) {
 }
 function ficheA4Html(n, f) {                  // comme page_fiche_prep_html de l'ordinateur (fiche 1 : tout en tableau)
   const c = f.champs, t = x => esc(x == null ? "" : String(x)).replace(/\n/g, "<br>");
-  const lignes = [["CB", c.cb], ["Palier", c.palier], ["OA", c.oa], ["Contenu", c.contenu], ["OS", c.os], ["Moyens pédagogiques", c.moyens_ped],
+  let lignes = [["CB", c.cb], ["Palier", c.palier], ["OA", c.oa], ["Contenu", c.contenu], ["OS", c.os], ["Moyens pédagogiques", c.moyens_ped],
                   ["Moyens matériels", c.moyens_mat], ["Documentation", c.doc]];
+  if (f.mohebs) lignes = [["CB", c.cb], ["Palier", c.palier], ["Objectifs", c.oa], ["Objectif spécifique", c.os], ["Contenu", c.contenu],
+                          ["Moyens", c.moyens_ped], ["Documentation", c.doc]].filter(x => String(x[1] || "").trim());
   let s = "<div class='fiche'>" + bandeauFicheHtml(n) + "<table class='tete'><tr><td style='width:27%'>Cours : <b>" + t(c.cours) + "</b><br>Fiche n° : <b>" + t(c.fiche)
     + "</b></td><td class='titre'>" + t(c.activite).toUpperCase() + "</td><td style='width:27%'>Date : <b>" + t(c.date) + "</b><br>Durée : <b>" + t(c.duree)
     + "</b></td></tr></table><table class='info'>";
   for (const [nom, v] of lignes) s += "<tr><td class='lab'>" + nom + "</td><td" + (nom === "Contenu" ? " class='gras'" : "") + ">" + t(v) + "</td></tr>";
   s += "</table><div class='dem'>Démarche</div><table class='etapes'><tr><th style='width:20%'>ÉTAPES</th><th>ACTIVITÉS DU MAÎTRE</th><th style='width:27%'>ACTIVITÉS DES ÉLÈVES</th></tr>";
+  if (f.mohebs) {                              // étape 324 : comme l'ordinateur (nom de l'étape une seule fois, case fusionnée)
+    const et = f.etapes || [], tailles = et.map(() => 0);
+    let tete = -1;
+    et.forEach((e, k) => { if (k && !String(e[0] || "").trim() && tete >= 0) tailles[tete]++; else { tete = k; tailles[k] = 1; } });
+    et.forEach(([e, m, el], k) => {
+      const cell = tailles[k] ? "<td class='et'" + (tailles[k] > 1 ? " rowspan='" + tailles[k] + "'" : "") + ">" + t(e) + "</td>" : "";
+      s += "<tr>" + cell + (String(el || "").trim() ? "<td>" + t(m) + "</td><td>" + t(el) + "</td>" : "<td colspan='2'>" + t(m) + "</td>") + "</tr>";
+    });
+  } else
   for (const [e, m0, el] of (f.etapes || [])) {
     const m = String(m0 || "");
     if (String(e).startsWith("Séance 2")) {
@@ -1625,7 +1821,7 @@ async function envoyerFiches(retour) {
   const donnees = {format: "GestionEcole-fiches-1", ecole: S.donnees.nom_ecole || "", annee: anneeScolaire(), code: S.code.slice(0, 3),
     maitre: ((ens.prenom || "") + " " + (ens.nom || "")).trim(), classes: [...new Set(liste.map(x => x.n))], envoye_le: new Date().toISOString(),
     fiches: liste.map(x => ({classe: x.n, semaine: x.s, activite: x.l.act, i: x.l.i, lecon: x.l.lecon, jour: x.l.jour,
-                             date: x.d ? texteDate(x.d) : "", etat: x.etat, fiche: {champs: x.f.champs, etapes: x.f.etapes, encadres: x.f.encadres || null, grille_eleve: x.f.grille_eleve || null}}))};
+                             date: x.d ? texteDate(x.d) : "", etat: x.etat, fiche: {champs: x.f.champs, etapes: x.f.etapes, encadres: x.f.encadres || null, grille_eleve: x.f.grille_eleve || null, mohebs: !!x.f.mohebs}}))};
   const b64 = octetsUtf8EnB64(JSON.stringify(donnees));
   const dates = [...new Set(liste.map(x => x.d ? texteDate(x.d) : ""))];
   const quand = dates.length === 1 && dates[0] ? (nomJour(liste[0].d) + "_" + dates[0].replace(/\//g, "-")) : "semaine_" + liste[0].s;

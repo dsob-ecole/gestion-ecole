@@ -553,7 +553,8 @@ public class MainActivity extends Activity {
 
 # l'application elle-même, rangée dans l'APK
 for nom in ("index.html", "manifest.webmanifest", "icone-192.png", "icone-512.png",
-            "contenu_CE1.bin", "contenu_CE2.bin", "contenu_CM1.bin", "contenu_CM2.bin"):     # étape 305 : les fiches
+            "contenu_CP.bin", "contenu_CE1.bin", "contenu_CE2.bin", "contenu_CM1.bin",
+            "contenu_CM2.bin"):                       # étape 305 : les fiches (étape 346 : le CP aussi)
     copier(nom, "app/src/main/assets/" + nom)
 copier("icone-192.png", "app/src/main/res/mipmap-xxxhdpi/ic_launcher.png")
 print("Projet Android prêt : version 1." + str(NUMERO))
