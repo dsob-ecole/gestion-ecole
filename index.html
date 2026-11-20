@@ -565,10 +565,12 @@ async function verifierMiseAJour() {
     if (n > moi && $("bandeau-maj-place")) $("bandeau-maj-place").innerHTML = bandeauMaj();
   } catch (e) { /* pas d'Internet : on réessaiera plus tard */ }
 }
+const BASE_V2 = 9;                             // étape 346 : à partir de la fabrication n°10, la version s'appelle 2.1, 2.2…
+function nomVersion(n) { return n > BASE_V2 ? "2." + (n - BASE_V2) : "1." + n; }
 function bandeauMaj() {
   const moi = versionApp(), n = (M.maj || {}).derniere || 0;
   if (!moi || n <= moi) return "";
-  return '<div class="bandeau-maj"><b>🔔 Nouvelle version disponible (1.' + n + ").</b><br>"
+  return '<div class="bandeau-maj"><b>🔔 Nouvelle version disponible (' + nomVersion(n) + ").</b><br>"
        + '<span class="gris">Vos notes et vos élèves sont gardés. Après le téléchargement, touchez « Ouvrir », puis « Mettre à jour ».</span>'
        + '<a class="gros" href="' + LIEN_APK + '" style="text-decoration:none">Mettre à jour</a></div>';
 }
