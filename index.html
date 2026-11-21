@@ -429,7 +429,8 @@ function peutQuitter() {
 }
 function ecran(titre, sous, html, retour, barre) {
   $("h-titre").textContent = titre; $("h-sous").textContent = sous || "";
-  $("ecran").innerHTML = html + '<div class="pied">' + NOM_LOGICIEL + " — téléphone · logiciel conçu par " + AUTEUR + "</div>";
+  $("ecran").innerHTML = html + '<div class="pied">' + NOM_LOGICIEL + " — téléphone"
+    + (versionApp() ? " · version " + nomVersion(versionApp()) : "") + " · logiciel conçu par " + AUTEUR + "</div>";   // étape 347
   const b = $("b-retour"); b.classList.toggle("cache", !retour); b.onclick = () => { if (peutQuitter()) retour(); };
   $("barre").classList.toggle("cache", !barre); $("barre-dedans").innerHTML = barre || ""; $("barre-msg").innerHTML = "";
   window.scrollTo(0, 0);
@@ -565,7 +566,7 @@ async function verifierMiseAJour() {
     if (n > moi && $("bandeau-maj-place")) $("bandeau-maj-place").innerHTML = bandeauMaj();
   } catch (e) { /* pas d'Internet : on réessaiera plus tard */ }
 }
-const BASE_V2 = 9;                             // étape 346 : à partir de la fabrication n°10, la version s'appelle 2.1, 2.2…
+const BASE_V2 = 11;                            // étapes 346-347 : à partir de la fabrication n°12, la version s'appelle 2.1, 2.2…
 function nomVersion(n) { return n > BASE_V2 ? "2." + (n - BASE_V2) : "1." + n; }
 function bandeauMaj() {
   const moi = versionApp(), n = (M.maj || {}).derniere || 0;
