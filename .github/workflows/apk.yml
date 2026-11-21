@@ -26,7 +26,7 @@ jobs:
       - name: Numero de version
         run: |
           N=${{ github.run_number }}
-          if [ "$N" -gt 9 ]; then echo "VERSION_NOM=2.$((N - 9))" >> "$GITHUB_ENV"; else echo "VERSION_NOM=1.$N" >> "$GITHUB_ENV"; fi
+          if [ "$N" -gt 11 ]; then echo "VERSION_NOM=2.$((N - 11))" >> "$GITHUB_ENV"; else echo "VERSION_NOM=1.$N" >> "$GITHUB_ENV"; fi
 
       - name: Preparer le projet Android
         env:
