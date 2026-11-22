@@ -31,6 +31,7 @@
   input[type=text], input[type=password], textarea {
       width: 100%; font-size: 21px; padding: 12px; border: 2px solid var(--trait); border-radius: 10px; background: white; }
   input:focus, textarea:focus { outline: none; border-color: var(--rouge); }
+  textarea { font-family: inherit; }
   .message { padding: 12px 14px; border-radius: 10px; margin: 10px 0; font-size: 16px; line-height: 1.4; }
   .message.erreur { background: var(--rose); color: #8E1B1B; } .message.ok { background: var(--vert-p); color: #1B5E20; }
   .message.info { background: #FFF6E0; color: #6B4E00; }
@@ -54,6 +55,11 @@
               padding: 12px; background: #F2F2F2; border-radius: 10px; color: var(--texte); user-select: all; }
   .pied { text-align: center; color: #999; font-size: 12px; margin-top: 18px; }
   .cache { display: none !important; }
+  .jour-cahier { background: white; border-radius: 12px; padding: 12px 14px; margin: 0 0 10px; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+  .jour-cahier h3 { margin: 0 0 6px; font-size: 18px; }
+  .jour-cahier textarea:disabled { background: #F2F2F2; color: var(--texte); -webkit-text-fill-color: var(--texte); opacity: 1; border-color: #E2E2E2; }
+  .coche { display: flex; align-items: center; gap: 10px; font-size: 16px; padding: 7px 0; }
+  .coche input { width: 24px; height: 24px; flex: 0 0 24px; }
   .fiche label.t { display: block; font-size: 15px; color: var(--gris); margin: 12px 0 4px; }
   .fiche input:disabled { background: #F2F2F2; color: var(--texte); -webkit-text-fill-color: var(--texte); opacity: 1; border-color: #E2E2E2; }
   .fiche input.faux { border-color: var(--rouge); background: var(--rose); }
@@ -348,6 +354,9 @@ function toutesLesNotes(d) {
       for (const [el, ns] of Object.entries((sem || {}).notes || {}))
         for (const [mat, v] of Object.entries(ns || {})) r[c.id + "|SEM:" + cle + "|" + el + "|" + mat] = strJ(v);
   }
+  // étape 350 : les jours du cahier de service écrits pendant ses semaines de service
+  const cid = premiereClasseId(d), jours = joursDeService(d), cah = cahierDe(d);
+  if (cid) for (const [j, v] of Object.entries(cah)) if (jours.has(j)) r[cid + "|CAHIER:|" + j + "|"] = strJ(v);
   return r;
 }
 // Mise à jour : la classe du directeur, mais on garde les notes tapées ici et pas encore envoyées
@@ -364,6 +373,10 @@ function garderNotesNonEnvoyees(ancienne, nouvelle) {
     if (!(k in L)) continue;
     const [cid, cle, el, mat] = k.split("|"), dest = parId[cid], src = lecture[cid];
     if (!dest || !src) continue;
+    if (cle === "CAHIER:") {                         // étape 350 : jour du cahier écrit ici, pas encore envoyé
+      const local = cahierDe(ancienne)[el]; if (!local) continue;
+      cahierDe(nouvelle, true)[el] = copieJ(local); gardes++; continue;
+    }
     if (cle === "ELEVE:") {                          // étape 254 : élève tapé ou corrigé ici, pas encore envoyé
       const local = (src.eleves || []).find(x => x && x.id === el); if (!local) continue;
       dest.eleves = dest.eleves || [];
@@ -430,7 +443,7 @@ function peutQuitter() {
 function ecran(titre, sous, html, retour, barre) {
   $("h-titre").textContent = titre; $("h-sous").textContent = sous || "";
   $("ecran").innerHTML = html + '<div class="pied">' + NOM_LOGICIEL + " — téléphone"
-    + (versionApp() ? " · version " + nomVersion(versionApp()) : "") + " · logiciel conçu par " + AUTEUR + "</div>";   // étape 347
+    + (versionApp() ? " · version " + VERSION_TEL : "") + " · logiciel conçu par " + AUTEUR + "</div>";   // étape 347
   const b = $("b-retour"); b.classList.toggle("cache", !retour); b.onclick = () => { if (peutQuitter()) retour(); };
   $("barre").classList.toggle("cache", !barre); $("barre-dedans").innerHTML = barre || ""; $("barre-msg").innerHTML = "";
   window.scrollTo(0, 0);
@@ -567,11 +580,14 @@ async function verifierMiseAJour() {
   } catch (e) { /* pas d'Internet : on réessaiera plus tard */ }
 }
 const BASE_V2 = 11;                            // étapes 346-347 : à partir de la fabrication n°12, la version s'appelle 2.1, 2.2…
+// Étape 350 : le NOM de la version ne suit plus le numéro de fabrication. C'est DSOB qui le choisit ici
+// (le fichier apk.yml de GitHub le lit aussi ici pour nommer l'application).
+const VERSION_TEL = "2.1";
 function nomVersion(n) { return n > BASE_V2 ? "2." + (n - BASE_V2) : "1." + n; }
 function bandeauMaj() {
   const moi = versionApp(), n = (M.maj || {}).derniere || 0;
   if (!moi || n <= moi) return "";
-  return '<div class="bandeau-maj"><b>🔔 Nouvelle version disponible (' + nomVersion(n) + ").</b><br>"
+  return '<div class="bandeau-maj"><b>🔔 Une mise à jour de l\'application est disponible.</b><br>'
        + '<span class="gris">Vos notes et vos élèves sont gardés. Après le téléchargement, touchez « Ouvrir », puis « Mettre à jour ».</span>'
        + '<a class="gros" href="' + LIEN_APK + '" style="text-decoration:none">Mettre à jour</a></div>';
 }
@@ -662,11 +678,12 @@ function ecranClasse(message) {
     + (estProf() ? "Vos matières, semestre par semestre" : "Les compositions de la classe, activité par activité") + '</span></span></button>'
     + '<button class="ligne-menu" id="b-eleves"><span class="ic">👧🏾</span><span>Mes élèves<span class="ex">' + (estProf() ? "La liste de la classe" : "La liste de la classe · ajouter ou corriger un élève") + '</span></span></button>'
     + (estProf() ? "" : '<button class="ligne-menu" id="b-repartition"><span class="ic">📅</span><span>Ma répartition<span class="ex">Les leçons de chaque semaine, d\'après le guide</span></span></button>'
-       + '<button class="ligne-menu" id="b-fiches"><span class="ic">📘</span><span>Mes fiches<span class="ex">Les fiches de la semaine · les envoyer au directeur</span></span></button>')
+       + '<button class="ligne-menu" id="b-fiches"><span class="ic">📘</span><span>Mes fiches<span class="ex">Les fiches de la semaine · les envoyer au directeur</span></span></button>'
+       + '<button class="ligne-menu" id="b-cahier"><span class="ic">📒</span><span>Cahier de service<span class="ex">Pendant votre semaine de service : la journée et les absents</span></span></button>')
     + '<div class="carte"><h2>🔄 Échange avec ' + (estProf() ? "l'établissement" : "le directeur") + '</h2>'
     + '<p class="gris">Classe reçue le ' + (cm.exportee_le ? new Date(+cm.exportee_le * 1000).toLocaleString("fr-FR") : "?") + ".</p>"
     + '<p class="etat ' + (sy.dernier_envoi ? "ok" : "non") + '">' + esc(envoi) + "</p>"
-    + '<button class="gros vert" id="b-envoyer">' + (estProf() ? "📤 Envoyer mes notes à l'établissement" : "📤 Envoyer au directeur (notes et élèves)") + '</button>'
+    + '<button class="gros vert" id="b-envoyer">' + (estProf() ? "📤 Envoyer mes notes à l'établissement" : "📤 Envoyer au directeur (notes, élèves, cahier)") + '</button>'
     + '<p class="gris">Le téléphone ouvre le partage : choisissez WhatsApp, puis ' + (estProf() ? "l'établissement" : "le directeur") + '. Rien n\'est effacé ici.</p>'
     + '<button class="gros contour" id="b-maj">📥 Importer une mise à jour de ma classe</button></div>'
     + '<button class="gros contour" id="b-licence">🔑 Licence</button>'
@@ -675,6 +692,7 @@ function ecranClasse(message) {
   $("b-compos").onclick = () => estProf() ? ecranProfClasses() : ecranCompositions(); $("b-eleves").onclick = ecranEleves;
   if ($("b-repartition")) $("b-repartition").onclick = () => ecranRepartition();
   if ($("b-fiches")) $("b-fiches").onclick = () => ecranFiches();
+  if ($("b-cahier")) $("b-cahier").onclick = () => ecranCahier();
   $("b-envoyer").onclick = envoyerNotes; $("b-maj").onclick = () => ecranImporter(ecranClasse);
   $("b-licence").onclick = () => ecranLicence(ecranClasse);
   $("b-fermer").onclick = () => { if (!peutQuitter()) return; S = null; delete M.code_garde; garderMemoire();
@@ -1066,6 +1084,108 @@ async function envoyerNotes() {
   d.synchro.envoye_tel = toutesLesNotes(d);           // ce que le directeur a maintenant
   await garderClasse();
   ecranClasse('<div class="message ok">✓ Fichier des notes préparé' + (r === "telecharge" ? " et enregistré dans <b>Téléchargements</b>. Envoyez-le au directeur par WhatsApp (trombone › Document)." : " et partagé.") + "</div>");
+}
+
+/* ===================== 📒 CAHIER DE SERVICE (étape 350) ===================== */
+function premiereClasseId(d) {
+  const ids = (copieMaitre(d).classes || []).map(n => ((d.classes || {})[n] || {}).id).filter(x => x).sort();
+  return ids[0] || "";
+}
+function serviceTel(d) { return (d || S.donnees).service_tel || null; }
+function joursDeService(d) {
+  const st = serviceTel(d); return new Set(st ? (st.semaines || []).flatMap(s => (s.jours || []).map(j => j[0])) : []);
+}
+function cahierDe(d, creer) {
+  const an = String(d.annee_en_cours || anneeScolaire());
+  if (!creer) return (((d.direction || {})[an] || {}).cahier) || {};
+  d.direction = d.direction || {}; d.direction[an] = d.direction[an] || {};
+  return (d.direction[an].cahier = d.direction[an].cahier || {});
+}
+function aujourdhui() { const x = new Date(); x.setHours(0, 0, 0, 0); return x; }
+
+function ecranCahier(message) {
+  const st = serviceTel();
+  let html = message || "";
+  if (!st) {
+    ecran("Cahier de service", "", html + '<div class="carte"><p>Le tableau de service n\'est pas dans votre fichier.</p>'
+      + '<p class="gris">Demandez au directeur de vous renvoyer votre classe (une mise à jour), après avoir enregistré le tableau de service sur son ordinateur.</p></div>', ecranClasse);
+    return;
+  }
+  const cah = cahierDe(S.donnees), auj = aujourdhui();
+  html += '<div class="carte"><p class="gris">Pendant <b>votre</b> semaine de service, notez chaque jour le déroulement de la journée et cochez les collègues absents. '
+       + "Ensuite, « 📤 Envoyer au directeur » (menu de la classe) : le cahier part avec les notes.</p>"
+       + '<p class="gris">Tableau de service reçu le ' + esc(st.fait_le || "?") + ".</p></div>";
+  const sems = st.semaines || [];
+  if (!sems.length) html += '<div class="carte"><p>D\'après le tableau de service, vous n\'êtes pas de service cette année.</p></div>';
+  let cible = -1;
+  sems.forEach((s, i) => { if (cible < 0 && enDate(s.vendredi) >= auj) cible = i; });
+  sems.forEach((s, i) => {
+    const jours = (s.jours || []).filter(j => !j[2]), faits = jours.filter(j => cah[j[0]]).length;
+    const passee = enDate(s.vendredi) < auj, enCours = enDate(s.lundi) <= auj && auj <= enDate(s.vendredi);
+    html += '<button class="ligne-menu" data-sem="' + i + '"><span class="ic">' + (enCours ? "🟢" : faits === jours.length && jours.length ? "✅" : passee ? "📕" : "📅")
+         + "</span><span>Semaine du " + esc(s.lundi.slice(0, 5)) + " au " + esc(s.vendredi) + '<span class="ex">'
+         + (enCours ? "C'est votre semaine de service · " : i === cible ? "Votre prochaine semaine de service · " : "")
+         + faits + " / " + jours.length + " jour(s) rempli(s)</span></span></button>";
+  });
+  ecran("Cahier de service", "Mes semaines de service", html, ecranClasse);
+  document.querySelectorAll("[data-sem]").forEach(b => b.onclick = () => ecranCahierSemaine(+b.dataset.sem));
+}
+
+function ecranCahierSemaine(i, message) {
+  const st = serviceTel(), s = st.semaines[i], cah = cahierDe(S.donnees), auj = aujourdhui();
+  const perso = st.personnel || [];
+  let html = (message || "") + (peutTaper() ? "" : bandeauLicence());
+  s.jours.forEach((j, k) => {
+    const [cle, nom, conge] = j, note = cah[cle] || {}, futur = enDate(cle) > auj;
+    html += '<div class="jour-cahier"><h3>' + esc(nom) + "</h3>";
+    if (conge) { html += '<p class="gris">Vacances — pas de classe</p></div>'; return; }
+    html += '<textarea rows="3" data-obs="' + k + '" placeholder="Déroulement de la journée" disabled style="font-size:17px">' + esc(note.obs || "") + "</textarea>"
+         + '<label class="coche"><input type="checkbox" data-sans="' + k + '"' + (note.sans_classe ? " checked" : "") + ' disabled> Pas de classe ce jour (férié…)</label>'
+         + (futur ? '<p class="gris" style="font-size:13px">Ce jour n\'est pas encore arrivé : vous l\'écrirez ce jour-là.</p>' : "")
+         + '<div data-abs-zone="' + k + '"' + (note.sans_classe ? ' class="cache"' : "") + '><p class="gris" style="margin:8px 0 0">Absents :</p>'
+         + perso.map((p, n) => '<label class="coche"><input type="checkbox" data-abs="' + k + '" data-p="' + esc(p[0]) + '"'
+             + ((note.absents || []).includes(p[0]) ? " checked" : "") + " disabled> " + esc(p[1]) + ' <span class="gris">(' + esc(p[2]) + ")</span></label>").join("")
+         + "</div></div>";
+  });
+  const barre = '<button class="gros" id="b-modifier">Modifier</button>'
+              + '<button class="gros vert cache" id="b-enreg">Enregistrer</button><button class="gros contour cache" id="b-annuler">Annuler</button>';
+  ecran("Semaine du " + s.lundi.slice(0, 5), "Cahier de service · jusqu'au " + s.vendredi, html, () => ecranCahier(), barre);
+  const champs = [...document.querySelectorAll("[data-obs],[data-sans],[data-abs]")];
+  const valeur = c => c.type === "checkbox" ? c.checked : c.value;
+  let ouvert = false; const depart = champs.map(valeur);
+  avantDeQuitter = () => ouvert && champs.some((c, k) => valeur(c) !== depart[k]);
+  const futurDe = k => enDate(s.jours[k][0]) > auj;
+  const ouvrir = oui => {
+    ouvert = oui;
+    champs.forEach(c => {
+      const k = +(c.dataset.obs ?? c.dataset.sans ?? c.dataset.abs);
+      c.disabled = !oui || (futurDe(k) && !("sans" in c.dataset));   // jour à venir : seulement « Pas de classe »
+    });
+    $("b-modifier").classList.toggle("cache", oui); $("b-enreg").classList.toggle("cache", !oui); $("b-annuler").classList.toggle("cache", !oui);
+  };
+  document.querySelectorAll("[data-sans]").forEach(c => c.onchange = () => {
+    const z = document.querySelector('[data-abs-zone="' + c.dataset.sans + '"]'); if (z) z.classList.toggle("cache", c.checked);
+  });
+  $("b-modifier").onclick = () => { if (!peutTaper()) return alerte(texteLicence()); ouvrir(true); };
+  $("b-annuler").onclick = () => { champs.forEach((c, k) => { if (c.type === "checkbox") c.checked = depart[k]; else c.value = depart[k]; });
+    document.querySelectorAll("[data-sans]").forEach(c => c.onchange()); ouvrir(false); $("barre-msg").innerHTML = ""; };
+  $("b-enreg").onclick = async () => {
+    const cahier = cahierDe(S.donnees, true), sauvegarde = strJ(cahier);
+    s.jours.forEach((j, k) => {
+      if (j[2]) return;
+      const obs = document.querySelector('[data-obs="' + k + '"]'); if (!obs) return;
+      const texte = obs.value.split(/\s+/).join(" ").trim(), sans = document.querySelector('[data-sans="' + k + '"]').checked;
+      const absents = [...document.querySelectorAll('[data-abs="' + k + '"]')].filter(c => c.checked).map(c => c.dataset.p);
+      if (sans) cahier[j[0]] = {obs: texte, absents: [], sans_classe: true};
+      else if (texte || absents.length) cahier[j[0]] = {obs: texte, absents: absents};
+      else delete cahier[j[0]];
+    });
+    attente(true, "Enregistrement…");
+    const ok = await garderClasse(); attente(false);
+    if (!ok) { const d = parseJ(sauvegarde); Object.keys(cahier).forEach(x => delete cahier[x]); Object.assign(cahier, d); return; }
+    avantDeQuitter = null;
+    ecranCahierSemaine(i, '<div class="message ok">✓ Cahier enregistré. Pensez à l\'envoyer au directeur (« 📤 Envoyer au directeur »).</div>');
+  };
 }
 
 function ecranLicence(retour, message) {
